@@ -1317,14 +1317,7 @@ static const char* getAppFolder()
 #if defined(__EMSCRIPTEN__)
 
         strcpy(appFolder, "/" TIC_PACKAGE "/" TIC_NAME "/");
-
-#elif defined(__TIC_ANDROID__)
-
-        strcpy(appFolder, SDL_AndroidGetExternalStoragePath());
-        const char AppFolder[] = "/" TIC_NAME "/";
-        strcat(appFolder, AppFolder);
-        mkdir(appFolder, 0777);
-
+        
 #else
 
         char* path = SDL_GetPrefPath(TIC_PACKAGE, TIC_NAME);

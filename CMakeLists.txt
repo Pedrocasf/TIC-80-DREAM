@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.3)
+cmake_minimum_required(VERSION 3.6)
 
 set(VERSION_MAJOR 1)
 set(VERSION_MINOR 2)
@@ -61,7 +61,11 @@ message("VERSION_HASH: ${VERSION_HASH}")
 
 configure_file("${PROJECT_SOURCE_DIR}/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
-if(ANDROID OR EMSCRIPTEN OR N3DS OR RPI)
+option(TERMUX "Termux build" ON)
+if(TERMUX)
+    set(CMAKE_SYSTEM_VERSION LINUX)
+endif()
+if(ANDROID OR EMSCRIPTEN OR N3DS OR RPI OR TERMUX)
     set(BUILD_LIBRETRO_DEFAULT OFF)
     set(BUILD_DEMO_CARTS_DEFAULT OFF)
     set(BUILD_PLAYER_DEFAULT OFF)
@@ -73,7 +77,8 @@ endif()
 
 set(BUILD_TOUCH_INPUT_DEFAULT ${ANDROID})
 
-option(BUILD_SDL "SDL Enabled" ON)
+option(SYSTEM_SDL "Use system sdl" ON)
+option(BUILD_SDL "SDL Enabled" OFF)
 option(BUILD_SDLGPU "SDL GPU Enabled" OFF)
 option(BUILD_SOKOL "Sokol Enabled" OFF)
 option(BUILD_LIBRETRO "libretro Enabled" ${BUILD_LIBRETRO_DEFAULT})
@@ -83,11 +88,15 @@ option(BUILD_PLAYER "Build standalone players" ${BUILD_PLAYER_DEFAULT})
 option(BUILD_TOUCH_INPUT "Build with touch input support" ${BUILD_TOUCH_INPUT_DEFAULT})
 option(BUILD_STUB "Build stub without editors" OFF)
 
-if(NOT BUILD_SDL)
+if(SYSTEM_SDL)
+    set(BUILD_SDL OFF)
+endif()
+
+if(NOT BUILD_SDL AND NOT SYSTEM_SDL)
     set(BUILD_SDLGPU OFF)
 endif()
 
-if(NOT RPI AND NOT N3DS AND NOT EMSCRIPTEN AND NOT BAREMETALPI)
+if(NOT RPI AND NOT N3DS AND NOT EMSCRIPTEN AND NOT BAREMETALPI AND NOT TERMUX)
     set(USE_NAETT TRUE)
 endif()
 
@@ -152,7 +161,7 @@ if(RPI)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu11")
 endif()
 
-if(ANDROID)
+if(ANDROID OR TERMUX)
     set(CMAKE_SYSTEM_VERSION 24)
 endif()
 
@@ -264,7 +273,7 @@ message("BUILD_WITH_MRUBY: ${BUILD_WITH_MRUBY}")
 if(BUILD_WITH_MRUBY)
     set(MRUBY_BUILDDIR ${CMAKE_SOURCE_DIR}/build/mruby)
     set(MRUBY_DIR ${THIRDPARTY_DIR}/mruby)
-    if(ANDROID)
+    if(ANDROID AND NOT TERMUX)
         set(MRUBY_CONFIG ${MRUBY_BUILDDIR}/tic_android.rb)
     else()
         set(MRUBY_CONFIG ${MRUBY_BUILDDIR}/tic_default.rb)
@@ -283,7 +292,7 @@ if(BUILD_WITH_MRUBY)
         exec_program(xcrun ARGS --sdk macosx --show-sdk-path OUTPUT_VARIABLE MRUBY_SYSROOT)
     endif()
 
-    if(ANDROID_NDK_HOME)
+    if(ANDROID_NDK_HOME AND NOT TERMUX)
         set(MRUBY_RAKE_EXTRA_OPTS "${MRUBY_RAKE_EXTRA_OPTS} ANDROID_NDK_HOME=${ANDROID_NDK_HOME}")
     endif()
 
@@ -645,13 +654,11 @@ if(BUILD_SDL AND NOT EMSCRIPTEN AND NOT RPI)
         set(HAVE_LIBC TRUE)
     endif()
 
-    if(ANDROID)
+    if(ANDROID AND NOT TERMUX)
         include_directories(${ANDROID_NDK}/sources/android/cpufeatures)
         set(SDL_STATIC_PIC ON CACHE BOOL "" FORCE)
     endif()
-
-    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)  
     add_subdirectory(${THIRDPARTY_DIR}/sdl2)
 
 endif()
@@ -670,7 +677,6 @@ if(BUILD_SDL AND BUILD_PLAYER AND NOT RPI)
     endif()
 
     target_include_directories(player-sdl PRIVATE
-        ${THIRDPARTY_DIR}/sdl2/include
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src)
 
@@ -803,7 +809,7 @@ IS_DOS
         target_link_libraries(tic80_libretro mingw32)
     endif()
 
-    if(ANDROID)
+    if(ANDROID AND NOT TERMUX)
         set_target_properties(tic80_libretro PROPERTIES SUFFIX "_android.so")
     endif()
 
@@ -1102,7 +1108,7 @@ set(SDLGPU_SRC
     ${SDLGPU_DIR}/externals/stb_image_write/stb_image_write.c
 )
 
-if(NOT ANDROID)
+if(NOT ANDROID OR TERMUX)
     list(APPEND SDLGPU_SRC
         ${SDLGPU_DIR}/renderer_GLES_1.c
         ${SDLGPU_DIR}/renderer_GLES_3.c
@@ -1118,7 +1124,7 @@ endif()
 
 add_library(sdlgpu STATIC ${SDLGPU_SRC})
 
-if(EMSCRIPTEN OR ANDROID)
+if(EMSCRIPTEN OR ANDROID OR TERMUX)
     target_compile_definitions(sdlgpu PRIVATE GLEW_STATIC SDL_GPU_DISABLE_GLES_1 SDL_GPU_DISABLE_GLES_3 SDL_GPU_DISABLE_OPENGL)
 else()
     target_compile_definitions(sdlgpu PRIVATE GLEW_STATIC SDL_GPU_DISABLE_GLES SDL_GPU_DISABLE_OPENGL_3 SDL_GPU_DISABLE_OPENGL_4)
@@ -1163,7 +1169,14 @@ endif()
 ################################
 # TIC-80 app
 ################################
+if(SYSTEM_SDL)
+find_package(SDL2 REQUIRED)
+include_directories(${SDL2_INCLUDE_DIRS})
+set(TIC80_SRC src/system/sdl/main.c)
+add_executable(tic80 ${TIC80_SRC})  
+target_link_libraries(tic80 tic80studio ${SDL2_LIBRARIES})
 
+endif()
 if(BUILD_SDL)
 
     set(TIC80_SRC src/system/sdl/main.c)
@@ -1175,7 +1188,7 @@ if(BUILD_SDL)
 
         add_executable(tic80 ${SYSTEM_TYPE} ${TIC80_SRC})
 
-    elseif(ANDROID)
+    elseif(ANDROID AND NOT TERMUX)
 
         set(TIC80_SRC ${TIC80_SRC} ${ANDROID_NDK}/sources/android/cpufeatures/cpu-features.c)
 
@@ -1206,7 +1219,7 @@ if(BUILD_SDL)
 
     target_link_libraries(tic80 tic80studio)
 
-    if(BUILD_TOUCH_INPUT)
+    if(BUILD_TOUCH_INPUT AND NOT TERMUX)
         target_compile_definitions(tic80 PRIVATE TOUCH_INPUT_SUPPORT)
     endif()
 
