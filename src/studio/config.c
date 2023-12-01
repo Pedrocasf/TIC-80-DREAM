@@ -104,6 +104,7 @@ static void readCodeTheme(Config* config, lua_State* lua)
 
         readBool(lua, "SHADOW", &config->data.theme.code.shadow);
         readBool(lua, "ALT_FONT", &config->data.theme.code.altFont);
+        readBool(lua, "ALT_CARET", &config->data.theme.code.altCaret);
         readBool(lua, "MATCH_DELIMITERS", &config->data.theme.code.matchDelimiters);
         readBool(lua, "AUTO_DELIMITERS", &config->data.theme.code.autoDelimiters);
     }
@@ -154,7 +155,6 @@ static void readConfig(Config* config)
             readGlobalBool(lua,     "CHECK_NEW_VERSION",    &config->data.checkNewVersion);
             readGlobalInteger(lua,  "UI_SCALE",             &config->data.uiScale);
             readGlobalBool(lua,     "SOFTWARE_RENDERING",   &config->data.soft);
-            readGlobalBool(lua,     "REVERT_SCROLL",        &config->data.revertScroll);
 
             if(config->data.uiScale <= 0)
                 config->data.uiScale = 1;

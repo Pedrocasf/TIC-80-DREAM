@@ -14,6 +14,7 @@ THEME=
 		CURSOR =2,
 		SHADOW =true,
 		ALT_FONT=false,
+		ALT_CARET=false,
 		MATCH_DELIMITERS=true,
 		AUTO_DELIMITERS=false,
 	},
@@ -30,7 +31,6 @@ THEME=
 CHECK_NEW_VERSION=true
 SOFTWARE_RENDERING=false
 UI_SCALE=4
-REVERT_SCROLL=false
 
 ---------------------------
 function TIC()
