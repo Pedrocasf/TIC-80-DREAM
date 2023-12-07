@@ -77,7 +77,7 @@ endif()
 
 set(BUILD_TOUCH_INPUT_DEFAULT ${ANDROID})
 
-option(SYSTEM_SDL "Use system sdl" ON)
+option(SYSTEM_SDL "Use system SDL" ON)
 option(BUILD_SDL "SDL Enabled" OFF)
 option(BUILD_SDLGPU "SDL GPU Enabled" OFF)
 option(BUILD_SOKOL "Sokol Enabled" OFF)
