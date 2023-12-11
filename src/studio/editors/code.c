@@ -456,7 +456,7 @@ static void updateEditor(Code* code)
     sprintf(code->status.line, "line %i/%i col %i", line + 1, getLinesCount(code) + 1, column + 1);
     {
         s32 codeLen = strlen(code->src);
-        sprintf(code->status.size, "size %i/%i", codeLen, MAX_CODE);
+        sprintf(code->status.size, "size %i/%zu", codeLen, MAX_CODE);
         code->status.color = codeLen > MAX_CODE ? tic_color_red : tic_color_white;
     }
 }
@@ -1511,7 +1511,7 @@ static s32 insertTab(Code* code, char* line_start, char* pos) {
     }
 }
 
-//has no effect is pos is not a valid tab character
+//has no effect if pos is not a valid tab character
 static s32 removeTab(Code* code, char* line_start, char* pos) {
     if (useSpacesForTab(code)) {
         s32 tab_size = getConfig(code->studio)->options.tabSize;
@@ -1529,6 +1529,7 @@ static s32 removeTab(Code* code, char* line_start, char* pos) {
         deleteCode(code, pos, pos+1);
         return 1;
     }
+    return 0;
 }
 
 static void doTab(Code* code, bool shift, bool crtl)
@@ -3122,7 +3123,7 @@ static void textEditTick(Code* code)
         tic_point scroll = {input->mouse.scrollx, input->mouse.scrolly};
 
         if(tic_api_key(tic, tic_key_shift))
-            scroll.x = -scroll.y;
+            scroll.x = scroll.y;
 
         s32* val = scroll.x ? &code->scroll.x : scroll.y ? &code->scroll.y : NULL;
 
