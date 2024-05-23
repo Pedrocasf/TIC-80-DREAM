@@ -1183,7 +1183,7 @@ static const char* const JsKeywords [] =
     "finally", "for", "function", "if", "implements", "import", "in", "instanceof", 
     "interface", "let", "new", "null", "package", "private", "protected", 
     "public", "return", "super", "switch", "static", "this", "throw", "try", 
-    "true", "typeof", "var", "void", "while", "with", "yield"
+    "true", "typeof", "var", "void", "while", "with", "yield", "of"
 };
 
 static inline bool isalnum_(char c) {return isalnum(c) || c == '_';}
@@ -1264,7 +1264,7 @@ static const u8 MarkRom[] =
     #include "../build/assets/jsmark.tic.dat"
 };
 
-const tic_script EXPORT_SCRIPT(Js) =
+TIC_EXPORT const tic_script EXPORT_SCRIPT(Js) =
 {
     .id                 = 12,
     .name               = "js",

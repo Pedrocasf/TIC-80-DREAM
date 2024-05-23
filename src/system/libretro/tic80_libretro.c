@@ -35,6 +35,9 @@ static retro_input_state_t input_state_cb;
 #define RETRO_BASE_POINTER_SPEED_DPAD 1.6f
 #define RETRO_SLOW_MOUSE_FACTOR_ANALOG 0.3f
 #define RETRO_SLOW_MOUSE_FACTOR_DPAD 0.4f
+#ifndef TIC80_FREQUENCY
+#define TIC80_FREQUENCY 1000000
+#endif
 
 enum pointer_device_type
 {
@@ -74,23 +77,28 @@ struct tic80_state
 	int mouseHideTimer;
 	int mouseHideTimerStart;
 	tic80* tic;
+	retro_usec_t frameTime;
 };
-static struct tic80_state* state;
+static struct tic80_state* state = NULL;
 
 /**
- * TIC-80 callback; Request counter
+ * TIC-80 callback; Request counter.
  */
 static u64 tic80_libretro_counter()
 {
-    return clock();
+	if (state == NULL) {
+		return 0;
+	}
+
+	return (u64)state->frameTime;
 }
 
 /**
- * TIC-80 callback; Request freq
+ * TIC-80 callback; Request frequency.
  */
-static u64 tic80_libretro_freq()
+static u64 tic80_libretro_frequency()
 {
-    return CLOCKS_PER_SEC;
+	return TIC80_FREQUENCY;
 }
 
 /**
@@ -98,9 +106,11 @@ static u64 tic80_libretro_freq()
  */
 void tic80_libretro_exit()
 {
-	if (state != NULL) {
-		state->quit = true;
+	if (state == NULL) {
+		return;
 	}
+
+	state->quit = true;
 }
 
 /**
@@ -115,7 +125,7 @@ void tic80_libretro_error(const char* info)
 	if (environ_cb) {
 		struct retro_message msg = {
 			info,
-			400
+			6 * TIC80_FRAMERATE
 		};
 		environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
 	}
@@ -146,32 +156,32 @@ void tic80_libretro_fallback_log(enum retro_log_level level, const char *fmt, ..
 }
 
 /**
+ * libretro callback; Called to indicate how much time has passed since last retro_run().
+ */
+void tic80_libretro_frame_time(retro_usec_t usec) {
+	if (state == NULL) {
+		return;
+	}
+
+	state->frameTime = usec;
+}
+
+/**
  * libretro callback; Global initialization.
  */
 RETRO_API void retro_init(void)
 {
-	// Ensure the state is ready.
+	// Do not re-initialize.
 	if (state != NULL) {
-		retro_deinit();
+		return;
 	}
 
-	// Initialize the base state.
+	// Initialize the base state with some default values.
 	state = (struct tic80_state*) malloc(sizeof(struct tic80_state));
-	state->quit = false;
-	state->cropBorder = false;
-	state->pointerDevice = POINTER_DEVICE_MOUSE;
+	memset(state, 0, sizeof(struct tic80_state));
 	state->pointerSpeed = 1.0f;
-	state->slowGamepadMouse = false;
-	state->mouseCursor = MOUSE_CURSOR_NONE;
 	state->mouseCursorColor = 15;
 	state->analogDeadzone = (int)(0.15f * (float)RETRO_ANALOG_RANGE);
-	state->mouseX = 0;
-	state->mouseY = 0;
-	state->mousePreviousX = 0;
-	state->mousePreviousY = 0;
-	state->mouseXAccumulator = 0.0f;
-	state->mouseYAccumulator = 0.0f;
-	state->mouseHideTimer = state->mouseHideTimerStart;
 
 	// Initialize the keyboard mappings.
 	state->keymap[RETROK_UNKNOWN] = tic_key_unknown;
@@ -294,10 +304,12 @@ RETRO_API void retro_deinit(void)
 	retro_unload_game();
 
 	// Free up the state.
-	if (state != NULL) {
-		free(state);
-		state = NULL;
+	if (state == NULL) {
+		return;
 	}
+
+	free(state);
+	state = NULL;
 }
 
 /**
@@ -743,7 +755,7 @@ void tic80_libretro_update_mouse(tic80_mouse* mouse)
 		state->mousePreviousX = state->mouseX;
 		state->mousePreviousY = state->mouseY;
 	}
-	if (state->mouseHideTimer > 0) {
+	else if (state->mouseHideTimer > 0) {
 		state->mouseHideTimer--;
 	}
 
@@ -759,14 +771,16 @@ void tic80_libretro_update_mouse(tic80_mouse* mouse)
 void tic80_libretro_mousecursor(tic80* game, tic80_mouse* mouse, enum mouse_cursor_type cursortype)
 {
 	TIC_UNUSED(mouse);
+
 	// Only draw the mouse cursor if it's active.
-	if (state->mouseHideTimer == 0) {
+	if (state->mouseHideTimerStart > 0 && state->mouseHideTimer == 0) {
 		return;
 	}
 
 	tic_mem* tic = (tic_mem*)state->tic;
 
-	// Determine which cursor to draw.
+	// Draw the cursor.
+	// TODO: Fix the cursor not being drawn on the screen by possibly modifing game->screen directly.
 	switch (cursortype) {
 		case MOUSE_CURSOR_NONE:
 			// Nothing.
@@ -838,7 +852,7 @@ void tic80_libretro_update(tic80* game)
 	tic80_libretro_update_keyboard(&state->input.keyboard);
 
 	// Update the game state.
-	tic80_tick(game, state->input, tic80_libretro_counter, tic80_libretro_freq);
+	tic80_tick(game, state->input, tic80_libretro_counter, tic80_libretro_frequency);
 	tic80_sound(game);
 }
 
@@ -951,16 +965,18 @@ void tic80_libretro_variables(bool startup)
 	}
 
 	// Mouse Hide Delay
-	state->mouseHideTimerStart = -1;
+	state->mouseHideTimerStart = 0;
 	var.key = "tic80_mouse_hide_delay";
 	var.value = NULL;
 	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
 		state->mouseHideTimerStart = atoi(var.value);
 		if (state->mouseHideTimerStart > 0) {
 			state->mouseHideTimerStart = state->mouseHideTimerStart * TIC80_FRAMERATE;
+			state->mouseHideTimer = state->mouseHideTimerStart;
 		}
 		else {
-			state->mouseHideTimerStart = -1;
+			state->mouseHideTimerStart = 0;
+			state->mouseHideTimer = 0;
 		}
 	}
 
@@ -1038,6 +1054,16 @@ RETRO_API bool retro_load_game(const struct retro_game_info *info)
 		return false;
 	}
 
+	// Set up the frame time callback.
+	struct retro_frame_time_callback frame_time = {
+		.callback = tic80_libretro_frame_time,
+		.reference = TIC80_FREQUENCY / TIC80_FRAMERATE,
+	};
+	if (!environ_cb(RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK, &frame_time)) {
+		log_cb(RETRO_LOG_ERROR, "[TIC-80] Failed to set frame time callback.\n");
+		return false;
+	}
+
 	// Set up the TIC-80 environment.
 #if RETRO_IS_BIG_ENDIAN
 	state->tic = tic80_create(TIC80_SAMPLERATE, TIC80_PIXEL_COLOR_ARGB8888);
@@ -1082,12 +1108,12 @@ RETRO_API bool retro_load_game(const struct retro_game_info *info)
  */
 RETRO_API void retro_unload_game(void)
 {
-	if (state != NULL) {
-		if (state->tic != NULL) {
-			tic80_delete(state->tic);
-			state->tic = NULL;
-		}
+	if (state == NULL || state->tic == NULL) {
+		return;
 	}
+
+	tic80_delete(state->tic);
+	state->tic = NULL;
 }
 
 /**
