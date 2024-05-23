@@ -33,7 +33,7 @@
 	shallow = true
 [submodule "vendor/wren"]
 	path = vendor/wren
-	url = https://github.com/wren-lang/wren.git
+	url = https://github.com/Pedrocasf/wren.git
 	shallow = true
 [submodule "vendor/zlib"]
 	path = vendor/zlib
