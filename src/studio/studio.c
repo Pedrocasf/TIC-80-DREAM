@@ -209,6 +209,9 @@ struct Studio
     Surf*       surf;
 
     tic_net* net;
+
+    Bytebattle bytebattle;
+
 #endif
 
     Start*      start;
@@ -221,6 +224,7 @@ struct Studio
     tic_fs* fs;
     s32 samplerate;
     tic_font systemFont;
+
 };
 
 #if defined(BUILD_EDITORS)
@@ -563,18 +567,7 @@ void toClipboard(const void* data, s32 size, bool flip)
         {
             char* ptr = clipboard;
 
-            for(s32 i = 0; i < size; i++, ptr+=Len)
-            {
-                sprintf(ptr, "%02x", ((u8*)data)[i]);
-
-                if(flip)
-                {
-                    char tmp = ptr[0];
-                    ptr[0] = ptr[1];
-                    ptr[1] = tmp;
-                }
-            }
-
+            tic_tool_buf2str(data, size, clipboard, flip);
             tic_sys_clipboard_set(clipboard);
             free(clipboard);
         }
@@ -1716,6 +1709,23 @@ static void switchCrtMonitor(Studio* studio)
 }
 #endif
 
+#if defined(BUILD_EDITORS)
+static u32 getTime()
+{
+    return tic_sys_counter_get() * 1000 / tic_sys_freq_get();
+}
+
+static void hideBattleTime(Studio* studio)
+{
+    studio->bytebattle.battle.hidetime = !studio->bytebattle.battle.hidetime;
+}
+
+static void startBattle(Studio* studio)
+{
+    studio->bytebattle.battle.started = getTime();
+}
+#endif
+
 #if defined(TIC80_PRO)
 
 static void switchBank(Studio* studio, s32 bank)
@@ -1745,19 +1755,19 @@ static bool enterWasPressedOnce(Studio* studio)
            keyWasPressedOnce(studio, tic_key_numpadenter);
 }
 
-static bool isDevMode(Studio* studio)
+#if defined(BUILD_EDITORS)
+
+static bool showGameMenu(Studio* studio)
 {
     tic_mem* tic = studio->tic;
-    const char *devmode = tic_tool_metatag(tic->cart.code.data, "devmode", tic_get_script(tic)->singleComment);
 
-    if(strcmp(devmode, "on") == 0)
-        return true;
+    char tag[TICNAME_MAX];
+    snprintf(tag, sizeof tag, "\n%s menu:", tic_get_script(tic)->singleComment);
 
-    else if(strcmp(devmode, "off") == 0)
-        return false;
-
-    return getConfig(studio)->options.devmode;
+    return strstr(tic->cart.code.data, tag);
 }
+
+#endif
 
 static void processShortcuts(Studio* studio)
 {
@@ -1829,18 +1839,18 @@ static void processShortcuts(Studio* studio)
             switch(studio->mode)
             {
             case TIC_MENU_MODE:     
-                isDevMode(studio) 
-                    ? setStudioMode(studio, studio->prevMode == TIC_RUN_MODE 
+                showGameMenu(studio) 
+                    ? studio_menu_back(studio->menu)
+                    : setStudioMode(studio, studio->prevMode == TIC_RUN_MODE 
                         ? TIC_CONSOLE_MODE 
-                        : studio->prevMode) 
-                    : studio_menu_back(studio->menu);
+                        : studio->prevMode);
                 break;
             case TIC_RUN_MODE:      
-                isDevMode(studio) 
-                    ? setStudioMode(studio, studio->prevMode == TIC_RUN_MODE 
+                showGameMenu(studio) 
+                    ? gotoMenu(studio)
+                    : setStudioMode(studio, studio->prevMode == TIC_RUN_MODE 
                         ? TIC_CONSOLE_MODE 
-                        : studio->prevMode) 
-                    : gotoMenu(studio);
+                        : studio->prevMode);
                 break;
             case TIC_CONSOLE_MODE: 
                 setStudioMode(studio, TIC_CODE_MODE);
@@ -1857,10 +1867,12 @@ static void processShortcuts(Studio* studio)
         }
         else if(keyWasPressedOnce(studio, tic_key_f8)) takeScreenshot(studio);
         else if(keyWasPressedOnce(studio, tic_key_f9)) startVideoRecord(studio);
+        else if(keyWasPressedOnce(studio, tic_key_f10)) hideBattleTime(studio);
+        else if(keyWasPressedOnce(studio, tic_key_f12)) startBattle(studio);
         else if(studio->mode == TIC_RUN_MODE && keyWasPressedOnce(studio, tic_key_f7))
             setCoverImage(studio);
 
-        if(isDevMode(studio) || studio->mode != TIC_RUN_MODE)
+        if(!showGameMenu(studio) || studio->mode != TIC_RUN_MODE)
         {
             if(keyWasPressedOnce(studio, tic_key_f1)) setStudioMode(studio, TIC_CODE_MODE);
             else if(keyWasPressedOnce(studio, tic_key_f2)) setStudioMode(studio, TIC_SPRITE_MODE);
@@ -1875,6 +1887,7 @@ static void processShortcuts(Studio* studio)
             {
             case TIC_MENU_MODE: studio_menu_back(studio->menu); break;
             case TIC_RUN_MODE: gotoMenu(studio); break;
+            default: break;
             }
         }
 #endif
@@ -2187,6 +2200,88 @@ static void processMouseStates(Studio* studio)
     tic->ram->input.mouse.scrollx *= -1;
 }
 
+#if defined(BUILD_EDITORS)
+static void doCodeExport(Studio* studio)
+{
+    char pos[sizeof studio->bytebattle.last.postag];
+    {
+        s32 x = 0, y = 0;
+
+        if(studio->mode != TIC_RUN_MODE)
+        {
+            codeGetPos(studio->code, &x, &y);
+            x++; y++;
+        }
+
+        sprintf(pos, "-- pos: %i,%i\n", x, y);
+    }
+
+    if(strcmp(studio->bytebattle.last.postag, pos) || strcmp(studio->bytebattle.last.code.data, studio->code->src))
+    {
+        FILE* file = fopen(studio->bytebattle.exp, "wb");
+
+        if(file)
+        {
+            strcpy(studio->bytebattle.last.postag, pos);
+            strcpy(studio->bytebattle.last.code.data, studio->code->src);
+
+            fwrite(pos, 1, strlen(pos), file);
+            fwrite(studio->code->src, 1, strlen(studio->code->src), file);
+            fclose(file);
+        }        
+    }
+}
+
+static void doCodeImport(Studio* studio)
+{
+    FILE* file = fopen(studio->bytebattle.imp, "rb");
+
+    if(file)
+    {
+        static tic_code code;
+        code.data[fread(code.data, 1, sizeof(tic_code), file)] = '\0';
+
+        char* end = strchr(code.data, '\n');
+
+        if(end)
+        {
+            static const char PosTag[] = "-- pos: ";
+            enum{TagSize = sizeof PosTag - 1};
+
+            if(memcmp(code.data, PosTag, TagSize) == 0)
+            {
+                char* start = code.data + TagSize;
+                char* sep = strchr(start, ',');
+
+                if(sep)
+                {
+                    *sep = *end = '\0';
+                    s32 x = atoi(start);
+                    s32 y = atoi(sep + 1);
+
+                    if(x == 0 && y == 0)
+                    {
+                        if(studio->mode != TIC_RUN_MODE)
+                            runGame(studio);
+                    }
+                    else
+                    {
+                        s32 offset = end - code.data + 1;
+                        memcpy(studio->code->src, code.data + offset, sizeof(tic_code) - offset);
+                        codeSetPos(studio->code, x - 1, y - 1);
+
+                        if(studio->mode == TIC_RUN_MODE)
+                            setStudioMode(studio, TIC_CODE_MODE);
+                    }
+                }
+            }
+        }
+
+        fclose(file);
+    }
+}
+#endif
+
 static void blitCursor(Studio* studio)
 {
     tic_mem* tic = studio->tic;
@@ -2298,6 +2393,37 @@ void studio_tick(Studio* studio, tic80_input input)
 
 #if defined(BUILD_EDITORS)
     tic_net_end(studio->net);
+
+    {
+        Bytebattle* bb = &(studio->bytebattle);
+        if(bb->battle.started)
+        {
+            u32 passed = getTime() - bb->battle.started;
+            bb->battle.left = bb->battle.time - passed;
+
+            if(bb->battle.left > 0)
+            {
+                s32 delta = bb->battle.time / (bb->limit.upper - bb->limit.lower);
+                bb->limit.current = bb->limit.upper - passed / delta;
+            }
+            else
+            {
+                bb->battle.left = 0;
+                bb->limit.current = bb->limit.lower;
+            }
+        }
+
+        if(bb->delay)
+            if(bb->ticks++ < bb->delay)
+                return;
+
+        if(bb->exp)
+            doCodeExport(studio);
+        else if(bb->imp)
+            doCodeImport(studio);
+
+        bb->ticks = 0;
+    }
 #endif
 }
 
@@ -2398,11 +2524,20 @@ void studio_delete(Studio* studio)
 #if defined(BUILD_EDITORS)
     tic_net_close(studio->net);
     free(studio->video.buffer);
+    if(studio->bytebattle.exp) free(studio->bytebattle.exp);
+    if(studio->bytebattle.imp) free(studio->bytebattle.imp);
 #endif
 
     free(studio->fs);
     free(studio);
 }
+
+#if defined(BUILD_EDITORS)
+Bytebattle* getBytebattle(Studio* studio)
+{
+    return studio->bytebattle.exp || studio->bytebattle.imp ? &(studio->bytebattle) : NULL;
+}
+#endif
 
 static StartArgs parseArgs(s32 argc, char **argv)
 {
@@ -2412,7 +2547,13 @@ static StartArgs parseArgs(s32 argc, char **argv)
         NULL,
     };
 
-    StartArgs args = {.volume = -1};
+    StartArgs args = {0};
+    args.volume = -1;
+
+#if defined(BUILD_EDITORS)
+    args.lowerlimit = 256;
+    args.upperlimit = 512;
+#endif
 
     struct argparse_option options[] = 
     {
@@ -2420,6 +2561,15 @@ static StartArgs parseArgs(s32 argc, char **argv)
 #define CMD_PARAMS_DEF(name, ctype, type, post, help) OPT_##type('\0', #name, &args.name, help),
         CMD_PARAMS_LIST(CMD_PARAMS_DEF)
 #undef  CMD_PARAMS_DEF
+#if defined(BUILD_EDITORS)
+        OPT_GROUP("Byte battle options:\n"),
+        OPT_STRING('\0',    "codeexport",    &args.codeexport,   "export code to filename"),
+        OPT_STRING('\0',    "codeimport",    &args.codeimport,   "import code from filename"),
+        OPT_INTEGER('\0',   "delay",         &args.delay,        "codeexport / codeimport update interval in ticks"),
+        OPT_INTEGER('\0',   "lowerlimit",    &args.lowerlimit,   "lower limit for code size (256 by default)"),
+        OPT_INTEGER('\0',   "upperlimit",    &args.upperlimit,   "upper limit for code size (512 by default)"),
+        OPT_INTEGER('\0',   "battletime",    &args.battletime,   "battletime in minutes"),
+#endif
         OPT_END(),
     };
 
@@ -2539,13 +2689,11 @@ Studio* studio_create(s32 argc, char **argv, s32 samplerate, tic80_pixel_color_f
 
         .samplerate = samplerate,
         .net = tic_net_create(TIC_WEBSITE),
+
+        .bytebattle = {0},
 #endif
         .tic = tic_core_create(samplerate, format),
     };
-
-#if defined(BUILD_EDITORS)
-    
-#endif
 
     {
         const char *path = args.fs ? args.fs : folder;
@@ -2638,13 +2786,41 @@ Studio* studio_create(s32 argc, char **argv, s32 samplerate, tic80_pixel_color_f
     studio->config->data.soft               |= args.soft;
     studio->config->data.cli                |= args.cli;
 
+#if defined(BUILD_EDITORS)
+    if(args.codeexport)
+        studio->bytebattle.exp = strdup(args.codeexport);
+    else if(args.codeimport)
+        studio->bytebattle.imp = strdup(args.codeimport);
+
+    studio->bytebattle.delay = args.delay;
+    studio->bytebattle.limit.lower = args.lowerlimit;
+
+    studio->bytebattle.limit.current
+        = studio->bytebattle.limit.upper 
+        = args.upperlimit;
+
+    studio->bytebattle.battle.left 
+        = studio->bytebattle.battle.time 
+        = args.battletime * 60 * 1000;
+#endif
+
     studioConfigChanged(studio);
 
     if(args.cli)
         args.skip = true;
 
+#if defined(BUILD_EDITORS)
     if(args.skip)
-        setStudioMode(studio, TIC_CONSOLE_MODE);
+    {
+        if(getBytebattle(studio))
+        {
+            studio->console->tick(studio->console);
+            gotoCode(studio);            
+        }
+        else
+            setStudioMode(studio, TIC_CONSOLE_MODE);
+    }
+#endif
 
     return studio;
 }

@@ -58,6 +58,10 @@
 #define SLASH_SYMBOL ('/')
 #endif
 
+#if defined (__TIC_MACOSX__)
+#include <mach-o/dyld.h>
+#endif
+
 static const char* PublicDir = TIC_HOST;
 
 struct tic_fs
@@ -951,7 +955,7 @@ const char* fs_apppath()
     s32 size = readlink("/proc/self/exe", apppath, sizeof apppath);
     apppath[size] = '\0';
 #elif defined(__TIC_MACOSX__)
-    s32 size = sizeof apppath;
+    u32 size = sizeof apppath;
     _NSGetExecutablePath(apppath, &size);
 #endif
 

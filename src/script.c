@@ -33,7 +33,7 @@
 extern tic_script EXPORT_SCRIPT(Lua);
 #endif
 
-#if defined(TIC_BUILD_WITH_MRUBY)
+#if defined(TIC_BUILD_WITH_RUBY)
 extern tic_script EXPORT_SCRIPT(Ruby);
 #endif
 
@@ -82,7 +82,7 @@ static const tic_script *Scripts[MAX_SUPPORTED_LANGS + 1] =
     &EXPORT_SCRIPT(Lua),
     #endif
 
-    #if defined(TIC_BUILD_WITH_MRUBY)
+    #if defined(TIC_BUILD_WITH_RUBY)
     &EXPORT_SCRIPT(Ruby),
     #endif
 
@@ -172,5 +172,7 @@ const tic_script* tic_get_script(tic_mem* memory)
             return script;
     }
 
-    return *Scripts;
+    static const tic_script empty;
+
+    return *Scripts ? *Scripts : &empty;
 }
