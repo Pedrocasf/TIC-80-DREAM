@@ -2667,6 +2667,23 @@ static void onRunCommand(Console* console)
 
 static void onResumeCommand(Console* console)
 {
+    if(console->desc->count)
+    {
+        const char* param = console->desc->params->key;
+
+        if(strcmp(param, "reload") == 0)
+        {
+            const tic_script* script_config = tic_get_script(console->tic);
+            if (script_config->eval)
+            {
+                script_config->eval(console->tic, console->tic->cart.code.data);
+            }
+            else
+            {
+                printError(console, "eval not implemented for the script");
+            }
+        }
+    }
     commandDone(console);
 
     resumeGame(console->studio);
@@ -2928,8 +2945,9 @@ static const char HelpUsage[] = "help [<text>"
                                                                                         \
     macro("resume",                                                                     \
         NULL,                                                                           \
-        "Resume last run cart / project.",                                              \
-        NULL,                                                                           \
+        "Resume last run cart / project. Reload game code\n"                            \
+        "first if given reload as an argument.",                                        \
+        "resume [reload]",                                                              \
         onResumeCommand,                                                                \
         NULL,                                                                           \
         NULL)                                                                           \
@@ -4217,7 +4235,7 @@ static void processKeyboard(Console* console)
         switch(getClipboardEvent(console->studio))
         {
         case TIC_CLIPBOARD_COPY: copyToClipboard(console); break;
-        case TIC_CLIPBOARD_PASTE: copyFromClipboard(console); break;
+        case TIC_CLIPBOARD_PASTE: copyFromClipboard(console); scrollConsole(console); break;
         default: break;
         }
 
@@ -4252,7 +4270,10 @@ static void processKeyboard(Console* console)
         }
         else
         {
-            if(keyWasPressed(console->studio, tic_key_up)) onHistoryUp(console);
+            if(keyWasPressed(console->studio, tic_key_up)) {
+			    onHistoryUp(console);
+			    scrollConsole(console);
+            }
             else if(keyWasPressed(console->studio, tic_key_down)) onHistoryDown(console);
             else if(keyWasPressed(console->studio, tic_key_left))
             {
