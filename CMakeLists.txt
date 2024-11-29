@@ -4,6 +4,16 @@ include(cmake/version.cmake)
 
 project(TIC-80 VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_REVISION} LANGUAGES C CXX)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -flto -ffat-lto-objects")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -flto -ffat-lto-objects")
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"  OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -flto")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -flto")
+endif()
+
 if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum OS X deployment version")
 endif()
@@ -14,7 +24,7 @@ message("VERSION_HASH: ${VERSION_HASH}")
 
 configure_file("${PROJECT_SOURCE_DIR}/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/version.h")
 
-if(ANDROID OR EMSCRIPTEN OR N3DS OR BAREMETALPI)
+if(ANDROID OR EMSCRIPTEN OR NINTENDO_3DS OR BAREMETALPI)
     set(BUILD_STATIC_DEFAULT ON)
 else()
     set(BUILD_STATIC_DEFAULT OFF)
@@ -29,7 +39,6 @@ option(BUILD_STATIC "Static runtime" ${BUILD_STATIC_DEFAULT})
 option(BUILD_WITH_ALL "Build all supported scripts" ${BUILD_WITH_ALL_DEFAULT})
 option(BUILD_SDL "SDL Enabled" ON)
 option(BUILD_SDLGPU "SDL GPU Enabled" OFF)
-option(BUILD_SOKOL "Sokol Enabled" OFF)
 option(BUILD_LIBRETRO "libretro Enabled" ${BUILD_LIBRETRO_DEFAULT})
 option(BUILD_TOOLS "bin2txt prj2cart" OFF)
 option(BUILD_EDITORS "Build cart editors" ON)
@@ -43,16 +52,6 @@ option(TIC80_TARGET "Target binary suffix")
 
 if(NOT TIC80_TARGET)
     set(TIC80_TARGET tic80)
-endif()
-
-if (BUILD_NO_OPTIMIZATION)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
-endif()
-
-if (BUILD_ASAN_DEBUG)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
 endif()
 
 if(NOT BUILD_SDL)
@@ -75,7 +74,7 @@ message("BUILD_SDLGPU: ${BUILD_SDLGPU}")
 message("BUILD_TOUCH_INPUT: ${BUILD_TOUCH_INPUT}")
 message("BUILD_WITH_ALL: ${BUILD_WITH_ALL}")
 
-if (N3DS)
+if (NINTENDO_3DS)
     set(BUILD_SDL OFF)
 endif()
 
@@ -83,11 +82,25 @@ if (BAREMETALPI)
     set(BUILD_SDL OFF)
 endif()
 
-if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN AND NOT ANDROID AND NOT N3DS)
+if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN AND NOT ANDROID AND NOT NINTENDO_3DS)
     set(LINUX TRUE)
 
     if(CMAKE_HOST_SYSTEM_NAME STREQUAL "FreeBSD")
         set(FREEBSD TRUE)
+    endif()
+endif()
+
+if (BUILD_NO_OPTIMIZATION)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")
+endif()
+
+if (BUILD_ASAN_DEBUG)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+
+    if (LINUX AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -shared-libasan")
     endif()
 endif()
 
@@ -158,7 +171,6 @@ include(cmake/png.cmake)
 include(cmake/studio.cmake)
 
 include(cmake/sdl.cmake)
-include(cmake/sokol.cmake)
 include(cmake/libretro.cmake)
 include(cmake/n3ds.cmake)
 

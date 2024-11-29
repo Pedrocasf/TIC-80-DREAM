@@ -40,7 +40,7 @@ typedef struct
     TraceOutput trace;
     ErrorOutput error;
     ExitCallback exit;
-    
+
     CounterCallback counter;
     FreqCallback freq;
     u64 start;
@@ -88,9 +88,9 @@ typedef struct
 } tic_rect;
 
 //                  SYNC DEFINITION TABLE
-//       .--------------------------------- - - - 
+//       .--------------------------------- - - -
 //       | CART    | RAM           | INDEX
-//       |---------+---------------+------- - - - 
+//       |---------+---------------+------- - - -
 //       |         |               |
 #define TIC_SYNC_LIST(macro) \
     macro(tiles,    tiles,        0) \
@@ -630,6 +630,18 @@ enum
         0,                                                                                                              \
         void,                                                                                                           \
         tic_mem*, s32 x, s32 y, s32 a, s32 b, u8 color)                                                                 \
+                                                                                                                        \
+                                                                                                                        \
+    macro(paint,                                                                                                        \
+        "paint(x y color bordercolor=-1)",                                                                              \
+                                                                                                                        \
+        "This function fills a contiguous area with a new color.\n"                                                     \
+        "If bordercolor is given fill will extend to color boundary.",                                                  \
+        4,                                                                                                              \
+        3,                                                                                                              \
+        0,                                                                                                              \
+        void,                                                                                                           \
+        tic_mem*, s32 x, s32 y, u8 color, u8 bordercolor)                                                               \
                                                                                                                         \
                                                                                                                         \
     macro(tri,                                                                                                          \

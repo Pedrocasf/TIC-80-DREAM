@@ -126,7 +126,7 @@
     macro(vbank)                \
     macro(id)                   \
     ALONE_KEY(macro)
-    
+
 static const char* WelcomeText =
     "TIC-80 is a fantasy computer for making, playing and sharing tiny games.\n\n"
     "It has built-in tools for development: code, sprites, maps, sound editors and the command line, "
@@ -1232,7 +1232,7 @@ static void onNewCommandConfirmed(Console* console)
             {
                 loadDemo(console, ln);
                 done = true;
-            }            
+            }
         }
 
         if(!done)
@@ -1498,7 +1498,7 @@ static s32 casecmp(const char *str1, const char *str2)
     return (s32) ((u8) tolower(*str1) - (u8) tolower(*str2));
 }
 
-static inline s32 itemcmp(const void* a, const void* b)
+static inline int itemcmp(const void* a, const void* b)
 {
     const FileItem* item1 = a;
     const FileItem* item2 = b;
@@ -1834,14 +1834,14 @@ static void onImportTilesBase(Console* console, const char* name, const void* bu
             case 1:
                 bpp_scale = 4;
                 break;
-            case 2: 
+            case 2:
                 bpp_scale = 2;
                 break;
             default:
                 break;
         }
         u32 color1, color2, color3, color4, color;
-        
+
         for(s32 j = 0, y = params.y, h = y + (params.h ? params.h : img.height); y < h; ++y, ++j)
             for(s32 i = 0, x = params.x, w = x + ((params.w ? params.w : img.width) / bpp_scale); x < w; ++x, i += bpp_scale)
                 if(x >= 0 && x < TIC_SPRITESHEET_SIZE && y >= 0 && y < TIC_SPRITESHEET_SIZE)
@@ -1853,8 +1853,9 @@ static void onImportTilesBase(Console* console, const char* name, const void* bu
                         case 2:
                             color1 = tic_nearest_color(pal->colors, (tic_rgb*)(img.pixels + i + j * img.width), 4);
                             color2 = tic_nearest_color(pal->colors, (tic_rgb*)(img.pixels + i + 1 + j * img.width), 4);
-                            // unsure if it's better to do add or or it together.
-                            color = (color2 << 2) + color1;
+                            // adding them together caused issues with squashing??? no idea why this isn't the case
+                            // for bpp 1
+                            color = (color2 << 2) | color1;
                             setSpritePixel(base, x, y, color);
                             break;
                         case 1:
@@ -1862,7 +1863,7 @@ static void onImportTilesBase(Console* console, const char* name, const void* bu
                             color2 = tic_nearest_color(pal->colors, (tic_rgb*)(img.pixels + i + 1 + j * img.width), 2);
                             color3 = tic_nearest_color(pal->colors, (tic_rgb*)(img.pixels + i + 2 + j * img.width), 2);
                             color4 = tic_nearest_color(pal->colors, (tic_rgb*)(img.pixels + i + 3 + j * img.width), 2);
-                            color = (color4 << 3) + (color3 << 2) + (color2 << 1) + color1;
+                            color = (color4 << 3) | (color3 << 2) | (color2 << 1) | color1;
                             setSpritePixel(base, x, y, color);
                             break;
                     }
@@ -3711,7 +3712,7 @@ static void onHelp_hotkeys(Console* console)
         free(rowReplaced);
 #undef  OFFSET
     }
-        
+
     printFront(console, "\nCode Editor:\n");
     FOR(const struct HotkeysRowCodeEditor*, row, HotkeysTextCodeEditor)
     {
@@ -3722,7 +3723,7 @@ static void onHelp_hotkeys(Console* console)
         free(rowReplaced);
 #undef  OFFSET
     }
-        
+
     printFront(console, "\nSprite Editor:\n");
     FOR(const struct HotkeysRowSpriteEditor*, row, HotkeysTextSpriteEditor)
     {
@@ -3733,7 +3734,7 @@ static void onHelp_hotkeys(Console* console)
         free(rowReplaced);
 #undef  OFFSET
     }
-            
+
     printFront(console, "\nMap Editor:\n");
     FOR(const struct HotkeysRowMapEditor*, row, HotkeysTextMapEditor)
     {
@@ -3744,7 +3745,7 @@ static void onHelp_hotkeys(Console* console)
         free(rowReplaced);
 #undef  OFFSET
     }
-    
+
     printFront(console, "\nSFX Editor:\n");
     FOR(const struct HotkeysRowSFXEditor*, row, HotkeysTextSFXEditor)
     {
@@ -4002,8 +4003,8 @@ static void onHttpVersionGet(const net_get_data* data)
                 s32 minor = json_int("minor", 0);
                 s32 patch = json_int("patch", 0);
 
-                if((major > TIC_VERSION_MAJOR) 
-                    || (major == TIC_VERSION_MAJOR && minor > TIC_VERSION_MINOR) 
+                if((major > TIC_VERSION_MAJOR)
+                    || (major == TIC_VERSION_MAJOR && minor > TIC_VERSION_MINOR)
                     || (major == TIC_VERSION_MAJOR && minor == TIC_VERSION_MINOR && patch > TIC_VERSION_REVISION))
                 {
                     char msg[TICNAME_MAX];
@@ -4359,7 +4360,7 @@ static void tick(Console* console)
         }
         else printBack(console, "\n loading cart...");
     }
-    
+
     tic_api_cls(tic, TIC_COLOR_BG);
     drawConsoleText(console);
 
@@ -4489,12 +4490,12 @@ void forceAutoSave(Console* console, const char* cart_name)
     commandDone(console);
 }
 
-static s32 cmdcmp(const void* a, const void* b)
+static int cmdcmp(const void* a, const void* b)
 {
     return strcmp(((const Command*)a)->name, ((const Command*)b)->name);
 }
 
-static s32 apicmp(const void* a, const void* b)
+static int apicmp(const void* a, const void* b)
 {
     return strcmp(((const ApiItem*)a)->name, ((const ApiItem*)b)->name);
 }
@@ -4579,7 +4580,7 @@ void initConsole(Console* console, Studio* studio, tic_fs* fs, tic_net* net, Con
             exit(1);
         }
         else
-            getStartScreen(console->studio)->embed = true;        
+            getStartScreen(console->studio)->embed = true;
     }
 
     console->active = !start->embed;

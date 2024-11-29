@@ -64,7 +64,7 @@ static mrb_value mrb_peek(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_poke(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int address, value;
     mrb_int bits = BITS_IN_BYTE;
@@ -78,7 +78,7 @@ static mrb_value mrb_poke(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_peek1(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int address;
     mrb_get_args(mrb, "i", &address);
@@ -89,7 +89,7 @@ static mrb_value mrb_peek1(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_poke1(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int address, value;
     mrb_get_args(mrb, "ii", &address, &value);
@@ -102,7 +102,7 @@ static mrb_value mrb_poke1(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_peek2(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int address;
     mrb_get_args(mrb, "i", &address);
@@ -113,7 +113,7 @@ static mrb_value mrb_peek2(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_poke2(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int address, value;
     mrb_get_args(mrb, "ii", &address, &value);
@@ -126,7 +126,7 @@ static mrb_value mrb_poke2(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_peek4(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int address;
     mrb_get_args(mrb, "i", &address);
@@ -137,7 +137,7 @@ static mrb_value mrb_peek4(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_poke4(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int address, value;
     mrb_get_args(mrb, "ii", &address, &value);
@@ -270,6 +270,19 @@ static mrb_value mrb_ellib(mrb_state* mrb, mrb_value self)
     return mrb_nil_value();
 }
 
+static mrb_value mrb_paint(mrb_state* mrb, mrb_value self)
+{
+    mrb_int x, y, color;
+    mrb_int bordercolor = -1;
+    mrb_get_args(mrb, "iii|i", &x, &y, &color, &bordercolor);
+
+    tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
+
+    core->api.paint(tic, x, y, color, bordercolor);
+
+    return mrb_nil_value();
+}
+
 static mrb_value mrb_tri(mrb_state* mrb, mrb_value self)
 {
     mrb_float x1, y1, x2, y2, x3, y3;
@@ -364,7 +377,7 @@ static mrb_value mrb_clip(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_btnp(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int index, hold, period;
     mrb_int argc = mrb_get_args(mrb, "|iii", &index, &hold, &period);
@@ -391,7 +404,7 @@ static mrb_value mrb_btnp(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_btn(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int index, hold, period;
     mrb_int argc = mrb_get_args(mrb, "|i", &index, &hold, &period);
@@ -808,7 +821,7 @@ static mrb_value mrb_key(mrb_state* mrb, mrb_value self)
 static mrb_value mrb_keyp(mrb_state* mrb, mrb_value self)
 {
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
-    
+
 
     mrb_int key, hold, period;
     mrb_int argc = mrb_get_args(mrb, "|iii", &key, &hold, &period);
@@ -994,18 +1007,23 @@ static mrb_value mrb_mouse(mrb_state *mrb, mrb_value self)
     mrb_value sym_left = mrb_symbol_value(mrb_intern_cstr(mrb, "left"));
     mrb_value sym_middle = mrb_symbol_value(mrb_intern_cstr(mrb, "middle"));
     mrb_value sym_right = mrb_symbol_value(mrb_intern_cstr(mrb, "right"));
+    mrb_value sym_scrollx = mrb_symbol_value(mrb_intern_cstr(mrb, "scrollx"));
+    mrb_value sym_scrolly = mrb_symbol_value(mrb_intern_cstr(mrb, "scrolly"));
 
     tic_core* core = getMRubyMachine(mrb); tic_mem* tic = (tic_mem*)core;
 
+    tic_point pos = core->api.mouse(tic);
     const tic80_mouse* mouse = &tic->ram->input.mouse;
 
     mrb_value hash = mrb_hash_new(mrb);
 
-    mrb_hash_set(mrb, hash, sym_x, mrb_fixnum_value(mouse->x));
-    mrb_hash_set(mrb, hash, sym_y, mrb_fixnum_value(mouse->y));
+    mrb_hash_set(mrb, hash, sym_x, mrb_fixnum_value(pos.x));
+    mrb_hash_set(mrb, hash, sym_y, mrb_fixnum_value(pos.y));
     mrb_hash_set(mrb, hash, sym_left, mrb_bool_value(mouse->left));
     mrb_hash_set(mrb, hash, sym_middle, mrb_bool_value(mouse->middle));
     mrb_hash_set(mrb, hash, sym_right, mrb_bool_value(mouse->right));
+    mrb_hash_set(mrb, hash, sym_scrollx, mrb_fixnum_value(mouse->scrollx));
+    mrb_hash_set(mrb, hash, sym_scrolly, mrb_fixnum_value(mouse->scrolly));
 
     return hash;
 }

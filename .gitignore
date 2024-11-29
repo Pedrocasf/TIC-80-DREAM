@@ -149,9 +149,7 @@ build/vendor/sdl2/sdl2-config
 build/vendor/sdl2/sdl2.pc
 build/bin/bin2txt
 build/bin/sdl-renderer
-build/bin/sokol-renderer
 build/bin/tic80
-build/bin/tic80-sokol
 out/
 build/bin/
 build/vendor/curl/libcurl.pc
@@ -181,7 +179,7 @@ CMakeSettings.json
 tic_mruby_build_config.rb.lock
 tic_mruby_wasm_build_config.rb.lock
 build/mruby_vendor-prefix/
-**/zig-cache
+**/.zig-cache
 **/zig-out
 .cache
 *~

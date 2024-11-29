@@ -4,8 +4,12 @@
 
 option(BUILD_WITH_PYTHON "Python Enabled" ${BUILD_WITH_ALL})
 message("BUILD_WITH_PYTHON: ${BUILD_WITH_PYTHON}")
-
 if(BUILD_WITH_PYTHON)
+    option(PK_ENABLE_OS "" OFF)
+
+    if(NOT WIN32)
+        option(PK_BUILD_WITH_IPO "" OFF)
+    endif()
 
     add_subdirectory(${THIRDPARTY_DIR}/pocketpy)
 
@@ -13,7 +17,7 @@ if(BUILD_WITH_PYTHON)
         target_compile_options(pocketpy PRIVATE -Wno-psabi)
     endif()
 
-    set(PYTHON_SRC 
+    set(PYTHON_SRC
         ${CMAKE_SOURCE_DIR}/src/api/python.c
         ${CMAKE_SOURCE_DIR}/src/api/parse_note.c
     )
@@ -28,19 +32,12 @@ if(BUILD_WITH_PYTHON)
 
     target_link_libraries(python PRIVATE runtime)
 
-    target_include_directories(python 
-        PRIVATE 
+    target_include_directories(python
+        PRIVATE
             ${THIRDPARTY_DIR}/pocketpy/include
             ${CMAKE_SOURCE_DIR}/include
             ${CMAKE_SOURCE_DIR}/src
     )
 
     target_link_libraries(python PRIVATE pocketpy)
-
-    if(EMSCRIPTEN)
-        # exceptions must be enabled for emscripten
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fexceptions")
-    endif()
-
-
 endif()

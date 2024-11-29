@@ -80,7 +80,7 @@ static inline void setPixelFast(tic_core* core, s32 x, s32 y, u8 color)
     tic_api_poke4((tic_mem*)core, y * TIC80_WIDTH + x, color);
 }
 
-static u8 getPixel(tic_core* core, s32 x, s32 y)
+static inline u8 getPixel(tic_core* core, s32 x, s32 y)
 {
     return x < 0 || y < 0 || x >= TIC80_WIDTH || y >= TIC80_HEIGHT
         ? 0
@@ -279,13 +279,8 @@ static void drawMap(tic_core* core, const tic_map* src, s32 x, s32 y, s32 width,
     for (s32 j = y, jj = sy; j < y + height; j++, jj += size)
         for (s32 i = x, ii = sx; i < x + width; i++, ii += size)
         {
-            s32 mi = i;
-            s32 mj = j;
-
-            while (mi < 0) mi += TIC_MAP_WIDTH;
-            while (mj < 0) mj += TIC_MAP_HEIGHT;
-            while (mi >= TIC_MAP_WIDTH) mi -= TIC_MAP_WIDTH;
-            while (mj >= TIC_MAP_HEIGHT) mj -= TIC_MAP_HEIGHT;
+            s32 mi = tic_modulo(i, TIC_MAP_WIDTH);
+            s32 mj = tic_modulo(j, TIC_MAP_HEIGHT);
 
             s32 index = mi + mj * TIC_MAP_WIDTH;
             RemapResult retile = { *(src->data + index), tic_no_flip, tic_no_rotate };
@@ -512,28 +507,28 @@ static void drawEllipse(tic_mem* memory, s32 x0, s32 y0, s32 x1, s32 y1, u8 colo
     s64 dx = 4 * (1 - a) * b * b, dy = 4 * (b1 + 1) * a * a; /* error increment */
     s64 err = dx + dy + b1 * a * a, e2; /* error of 1.step */
 
-    if (x0 > x1) { x0 = x1; x1 += a; } /* if called with swapped pos32s */  
+    if (x0 > x1) { x0 = x1; x1 += a; } /* if called with swapped pos32s */
     if (y0 > y1) y0 = y1; /* .. exchange them */
     y0 += (b + 1) / 2; y1 = y0 - b1;   /* starting pixel */
     a *= 8 * a; b1 = 8 * b * b;
 
-    do 
+    do
     {
         pix(memory, x1, y0, color); /*   I. Quadrant */
         pix(memory, x0, y0, color); /*  II. Quadrant */
         pix(memory, x0, y1, color); /* III. Quadrant */
         pix(memory, x1, y1, color); /*  IV. Quadrant */
         e2 = 2 * err;
-        if (e2 <= dy) { y0++; y1--; err += dy += a; }  /* y step */ 
+        if (e2 <= dy) { y0++; y1--; err += dy += a; }  /* y step */
         if (e2 >= dx || 2 * err > dy) { x0++; x1--; err += dx += b1; } /* x step */
     } while (x0 <= x1);
 
-    while (y0-y1 < b) 
+    while (y0-y1 < b)
     {  /* too early stop of flat ellipses a=1 */
         pix(memory, x0 - 1, y0,    color); /* -> finish tip of ellipse */
-        pix(memory, x1 + 1, y0++,  color); 
+        pix(memory, x1 + 1, y0++,  color);
         pix(memory, x0 - 1, y1,    color);
-        pix(memory, x1 + 1, y1--,  color); 
+        pix(memory, x1 + 1, y1--,  color);
     }
 }
 
@@ -555,7 +550,7 @@ static void drawSidesBuffer(tic_mem* memory, s32 y0, s32 y1, u8 color)
     s32 yt = MAX(core->state.clip.t, y0);
     s32 yb = MIN(core->state.clip.b, y1 + 1);
     u8 final_color = mapColor(&core->memory, color);
-    for (s32 y = yt; y < yb; y++) 
+    for (s32 y = yt; y < yb; y++)
     {
         s32 xl = MAX(SidesBuffer.Left[y], core->state.clip.l);
         s32 xr = MIN(SidesBuffer.Right[y] + 1, core->state.clip.r);
@@ -618,6 +613,96 @@ static void drawLine(tic_mem* tic, float x0, float y0, float x1, float y1, u8 co
     setPixel((tic_core*)tic, x1, y1, color);
 }
 
+// Queue frame for floodFill.
+// Filled horizontal segment of scanline y for xl <= x <= xr.
+// Parent segment was on line y – dy. dy = 1 or –1.
+typedef struct
+{
+    s32 y;
+    s32 xl;
+    s32 xr;
+    s32 dy;
+} FillSegment;
+
+#define FILLQUEUESIZE 400
+static struct
+{
+    FillSegment seg[FILLQUEUESIZE];
+    size_t ini; // index of empty next in
+    size_t outi; // index of next out
+} fillQueue;
+
+static inline void fillEnqueue(tic_core* tic, s32 y, s32 xl, s32 xr, s32 dy)
+{
+    size_t nextini = (fillQueue.ini + 1) % FILLQUEUESIZE;
+    if (nextini == fillQueue.outi)
+        return; // queue full
+    if (y + dy < tic->state.clip.t || y + dy >= tic->state.clip.b)
+        return;
+    FillSegment* qseg = &fillQueue.seg[fillQueue.ini];
+    qseg->y = y;
+    qseg->xl = xl;
+    qseg->xr = xr;
+    qseg->dy = dy;
+    fillQueue.ini = nextini;
+}
+
+static inline bool fillDequeue(s32* y, s32* xl, s32* xr, s32* dy)
+{
+    if (fillQueue.ini == fillQueue.outi)
+        return false; // queue empty
+    FillSegment* qseg = &fillQueue.seg[fillQueue.outi];
+    *y = qseg->y + qseg->dy;
+    *xl = qseg->xl;
+    *xr = qseg->xr;
+    *dy = qseg->dy;
+    fillQueue.outi = (fillQueue.outi + 1) % FILLQUEUESIZE;
+    return true;
+}
+
+static inline bool floodFillInside(u8 pix, u8 paint, u8 border, u8 original)
+{
+    return border == 255 ? pix == original : pix != paint && pix != border;
+}
+
+// "A Seed Fill Algorithm", Paul S. Heckbert, Graphics Gems, Andrew Glassner
+// https://github.com/erich666/GraphicsGems/blob/master/gems/SeedFill.c
+static void floodFill(tic_core* tic, s32 x, s32 y, u8 color, u8 border)
+{
+    if (x < tic->state.clip.l || y < tic->state.clip.t || x >= tic->state.clip.r || y >= tic->state.clip.b)
+        return;
+    u8 ov = getPixel(tic, x, y);
+    if (ov == color || ov == border)
+        return;
+    fillQueue.ini = fillQueue.outi = 0;
+    fillEnqueue(tic, y, x, x, 1); // needed in some cases
+    fillEnqueue(tic, y + 1, x, x, -1); // seed segment
+    s32 l, x1, x2, dy;
+    while (fillDequeue(&y, &x1, &x2, &dy))
+    {
+        // segment of scan line y-dy for x1<=x<=x2 was previously filled,
+        // now explore adjacent pixels in scan line y
+        for (x = x1; x >= tic->state.clip.l && floodFillInside(getPixel(tic, x, y), color, border, ov); x--)
+            setPixelFast(tic, x, y, color);
+        if (x >= x1)
+            goto floodFill_skip;
+        l = x + 1;
+        if (l < x1)
+            fillEnqueue(tic, y, l, x1 - 1, -dy); // check leak left
+        x = x1 + 1;
+        do {
+            for (; x < tic->state.clip.r && floodFillInside(getPixel(tic, x, y), color, border, ov); x++)
+                setPixelFast(tic, x, y, color);
+            fillEnqueue(tic, y, l, x - 1, dy);
+            if (x > x2 + 1)
+                fillEnqueue(tic, y, x2 + 1, x - 1, -dy); // check leak right
+floodFill_skip:
+            for (x++; x <= x2 && !floodFillInside(getPixel(tic, x, y), color, border, ov); x++);
+            l = x;
+        } while (x <= x2);
+    }
+}
+
 typedef union
 {
     struct
@@ -638,7 +723,7 @@ typedef union
     double d[3];
 } Vec3;
 
-typedef struct 
+typedef struct
 {
     void* data;
     const Vec2* v[3];
@@ -687,7 +772,7 @@ static void drawTri(tic_mem* tic, const Vec2* v0, const Vec2* v1, const Vec2* v2
         Vec2 p = {min.x + Center, min.y + Center};
 
         s32 c = (i + 1) % 3, n = (i + 2) % 3;
-        
+
         d[i].x = (a.v[c]->y - a.v[n]->y) / area;
         d[i].y = (a.v[n]->x - a.v[c]->x) / area;
         s.d[i] = edgeFn(a.v[c], a.v[n], &p) / area;
@@ -724,7 +809,7 @@ void tic_api_tri(tic_mem* tic, float x1, float y1, float x2, float y2, float x3,
     drawTri(tic,
         &(Vec2){x1, y1},
         &(Vec2){x2, y2},
-        &(Vec2){x3, y3}, 
+        &(Vec2){x3, y3},
         triColorShader, &color);
 }
 
@@ -779,8 +864,8 @@ static inline bool shaderStart(const ShaderAttr* a, Vec3* vars, s32 pixel)
         vars->y += a->w.d[i] * t->d.y;
     }
 
-    if(data->depth) 
-        vars->x /= vars->z, 
+    if(data->depth)
+        vars->x /= vars->z,
         vars->y /= vars->z;
 
     return true;
@@ -807,8 +892,8 @@ static tic_color triTexMapShader(const ShaderAttr* a, s32 pixel)
     enum { MapWidth = TIC_MAP_WIDTH * TIC_SPRITESIZE, MapHeight = TIC_MAP_HEIGHT * TIC_SPRITESIZE,
         WMask = TIC_SPRITESIZE - 1, HMask = TIC_SPRITESIZE - 1 };
 
-    s32 iu = tic_modulo(vars.x, MapWidth);
-    s32 iv = tic_modulo(vars.y, MapHeight);
+    s32 iu = tic_modulo(floor(vars.x), MapWidth);
+    s32 iv = tic_modulo(floor(vars.y), MapHeight);
 
     u8 idx = data->map[(iv >> 3) * TIC_MAP_WIDTH + (iu >> 3)];
     tic_tileptr tile = tic_tilesheet_gettile(&data->sheet, idx, true);
@@ -826,7 +911,8 @@ static tic_color triTexTileShader(const ShaderAttr* a, s32 pixel)
 
     enum { WMask = TIC_SPRITESHEET_SIZE - 1, HMask = TIC_SPRITESHEET_SIZE * TIC_SPRITE_BANKS - 1 };
 
-    return shaderEnd(a, &vars, pixel, data->mapping[tic_tilesheet_getpix(&data->sheet, (s32)vars.x & WMask, (s32)vars.y & HMask)]);
+    return shaderEnd(a, &vars, pixel, data->mapping[tic_tilesheet_getpix(&data->sheet,
+                     (s32)floor(vars.x) & WMask, (s32)floor(vars.y) & HMask)]);
 }
 
 static tic_color triTexVbankShader(const ShaderAttr* a, s32 pixel)
@@ -837,27 +923,27 @@ static tic_color triTexVbankShader(const ShaderAttr* a, s32 pixel)
     if(!shaderStart(a, &vars, pixel))
         return TRANSPARENT_COLOR;
 
-    s32 iu = tic_modulo(vars.x, TIC80_WIDTH);
-    s32 iv = tic_modulo(vars.y, TIC80_HEIGHT);
+    s32 iu = tic_modulo(floor(vars.x), TIC80_WIDTH);
+    s32 iv = tic_modulo(floor(vars.y), TIC80_HEIGHT);
 
     return shaderEnd(a, &vars, pixel, data->mapping[tic_tool_peek4(data->vram->data, iv * TIC80_WIDTH + iu)]);
 }
 
-void tic_api_ttri(tic_mem* tic, 
-    float x1, float y1, 
-    float x2, float y2, 
-    float x3, float y3, 
-    float u1, float v1, 
-    float u2, float v2, 
-    float u3, float v3, 
-    tic_texture_src texsrc, u8* colors, s32 count, 
+void tic_api_ttri(tic_mem* tic,
+    float x1, float y1,
+    float x2, float y2,
+    float x3, float y3,
+    float u1, float v1,
+    float u2, float v2,
+    float u3, float v3,
+    tic_texture_src texsrc, u8* colors, s32 count,
     float z1, float z2, float z3, bool depth)
 {
     // do not use depth if user passed z=0.0
     if(z1 < FLT_EPSILON || z2 < FLT_EPSILON || z3 < FLT_EPSILON)
         depth = false;
 
-    TexData texData = 
+    TexData texData =
     {
         .sheet = getTileSheetFromSegment(tic, tic->ram->vram.blit.segment),
         .mapping = getPalette(tic, colors, count),
@@ -866,7 +952,7 @@ void tic_api_ttri(tic_mem* tic,
         .depth = depth,
     };
 
-    TexVert t[] = 
+    TexVert t[] =
     {
         {x1, y1, u1, v1, z1},
         {x2, y2, u2, v2, z2},
@@ -875,22 +961,22 @@ void tic_api_ttri(tic_mem* tic,
 
     if(depth)
         for(s32 i = 0; i != COUNT_OF(t); ++i)
-            t[i].d.x /= t[i].d.z, 
-            t[i].d.y /= t[i].d.z, 
+            t[i].d.x /= t[i].d.z,
+            t[i].d.y /= t[i].d.z,
             t[i].d.z = 1.0 / t[i].d.z;
 
-    static const PixelShader Shaders[] = 
+    static const PixelShader Shaders[] =
     {
         [tic_tiles_texture] = triTexTileShader,
         [tic_map_texture]   = triTexMapShader,
         [tic_vbank_texture] = triTexVbankShader,
     };
-    
+
     if(texsrc >= 0 && texsrc < COUNT_OF(Shaders))
         drawTri(tic,
             (const Vec2*)&t[0],
             (const Vec2*)&t[1],
-            (const Vec2*)&t[2], 
+            (const Vec2*)&t[2],
             Shaders[texsrc], &texData);
 }
 
@@ -918,6 +1004,12 @@ u8 tic_api_mget(tic_mem* memory, s32 x, s32 y)
 void tic_api_line(tic_mem* memory, float x0, float y0, float x1, float y1, u8 color)
 {
     drawLine(memory, x0, y0, x1, y1, mapColor(memory, color));
+}
+
+void tic_api_paint(tic_mem* memory, s32 x, s32 y, u8 color, u8 bordercolor)
+{
+    bordercolor = bordercolor == 255 ? 255 : mapColor(memory, bordercolor);
+    floodFill((tic_core*)memory, x, y, mapColor(memory, color), bordercolor);
 }
 
 #if defined(BUILD_DEPRECATED)

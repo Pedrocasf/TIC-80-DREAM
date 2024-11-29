@@ -1,6 +1,6 @@
 //
 // kernel.cpp
-// 
+//
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
@@ -208,7 +208,7 @@ void gamePadStatusHandler (unsigned nDeviceIndex, const TGamePadState *pState)
 {
 
     keyspinlock.Acquire();
-    // Just copy buttons and axes. 
+    // Just copy buttons and axes.
     gamepad.buttons = pState -> buttons;
     gamepad.naxes = pState -> naxes;
     for (int i = 0; i< pState->naxes; i++)
@@ -392,7 +392,7 @@ TShutdownMode Run(void)
         char* argv[] = { &arg0[0], NULL };
         int argc = 1;
         malloc(88);
-        platform.studio = studio_create(argc, argv, 44100, TIC80_PIXEL_COLOR_BGRA8888, "tic80", INT32_MAX);
+        platform.studio = studio_create(argc, argv, 44100, TIC80_PIXEL_COLOR_BGRA8888, "tic80", INT32_MAX, tic_layout_qwerty);
         malloc(99);
 
     }
@@ -404,7 +404,7 @@ TShutdownMode Run(void)
         char* argv[] = { &arg0[0], &arg1[0], NULL };
         int argc = 2;
         dbg("Without keyboard\n");
-        platform.studio = studio_create(argc, argv, 44100, TIC80_PIXEL_COLOR_BGRA8888, "tic80", INT32_MAX);
+        platform.studio = studio_create(argc, argv, 44100, TIC80_PIXEL_COLOR_BGRA8888, "tic80", INT32_MAX, tic_layout_qwerty);
     }
     dbg("studio_create OK\n");
 

@@ -23,14 +23,14 @@ if(BUILD_WITH_SCHEME)
     target_link_libraries(scheme PRIVATE runtime)
 
     set_target_properties(scheme PROPERTIES LINKER_LANGUAGE CXX)
-    target_include_directories(scheme 
+    target_include_directories(scheme
         PUBLIC ${SCHEME_DIR}
-        PRIVATE 
+        PRIVATE
             ${CMAKE_SOURCE_DIR}/include
             ${CMAKE_SOURCE_DIR}/src
     )
 
-    if (N3DS)
+    if (NINTENDO_3DS)
         target_compile_definitions(scheme PRIVATE S7_N3DS)
     endif()
 
