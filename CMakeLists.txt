@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.10)
 
 include(cmake/version.cmake)
 
@@ -152,6 +152,7 @@ include(cmake/gif.cmake)
 include(cmake/blipbuf.cmake)
 include(cmake/zlib.cmake)
 include(cmake/zip.cmake)
+include(cmake/png.cmake)
 include(cmake/tools.cmake)
 
 include(cmake/lua.cmake)
@@ -170,7 +171,6 @@ include(cmake/core.cmake)
 include(cmake/wave.cmake)
 include(cmake/argparse.cmake)
 include(cmake/naett.cmake)
-include(cmake/png.cmake)
 include(cmake/studio.cmake)
 
 include(cmake/sdl.cmake)
