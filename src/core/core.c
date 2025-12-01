@@ -37,7 +37,7 @@
 
 #include "tic_assert.h"
 
-#ifdef _3DS
+#ifdef __3DS__
 #include <3ds.h>
 #endif
 
@@ -358,6 +358,8 @@ void tic_api_reset(tic_mem* memory)
         resetVbank(memory);
     }
 
+    memory->ram->vram.vars.cursor.sprite = tic_cursor_arrow;
+    memory->ram->vram.vars.cursor.system = true;
     memory->ram->input.mouse.relative = 0;
 
     soundClear(memory);
@@ -533,7 +535,7 @@ void tic_core_close(tic_mem* memory)
     blip_delete(core->blip.left);
     blip_delete(core->blip.right);
 
-#ifdef _3DS
+#ifdef __3DS__
     linearFree(memory->product.screen);
 #else
     free(memory->product.screen);
@@ -724,7 +726,7 @@ tic_mem* tic_core_create(s32 samplerate, tic80_pixel_color_format format)
     core->samplerate = samplerate;
 
     memset(core->memory.ram, 0, sizeof(tic_ram));
-#ifdef _3DS
+#ifdef __3DS__
     // To feed texture data directly to the 3DS GPU, linearly allocated memory is required, which is
     // not guaranteed by malloc.
     // Additionally, allocate TIC80_FULLHEIGHT + 1 lines to minimize glitches in linear scaling mode.
