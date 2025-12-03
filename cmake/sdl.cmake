@@ -84,8 +84,8 @@ endif()
 
 if(BUILD_SDLGPU)
 
-set(SDLGPU_DIR ${THIRDPARTY_DIR}/sdl-gpu/src)
-set(SDLGPU_SRC
+    set(SDLGPU_DIR ${THIRDPARTY_DIR}/sdl-gpu/src)
+    set(SDLGPU_SRC
     ${SDLGPU_DIR}/renderer_GLES_2.c
     ${SDLGPU_DIR}/SDL_gpu.c
     ${SDLGPU_DIR}/SDL_gpu_matrix.c
@@ -94,8 +94,8 @@ set(SDLGPU_SRC
     ${SDLGPU_DIR}/externals/stb_image_write/stb_image_write.c
 )
 
-if(NOT ANDROID AND NOT NINTENDO_SWITCH)
-    list(APPEND SDLGPU_SRC
+    if(NOT ANDROID AND NOT NINTENDO_SWITCH)
+        list(APPEND SDLGPU_SRC
         ${SDLGPU_DIR}/renderer_GLES_1.c
         ${SDLGPU_DIR}/renderer_GLES_3.c
         ${SDLGPU_DIR}/renderer_OpenGL_1.c
@@ -106,59 +106,59 @@ if(NOT ANDROID AND NOT NINTENDO_SWITCH)
         ${SDLGPU_DIR}/SDL_gpu_shapes.c
         ${SDLGPU_DIR}/externals/glew/glew.c
     )
-endif()
+    endif()
 
-add_library(sdlgpu STATIC ${SDLGPU_SRC})
+    add_library(sdlgpu STATIC ${SDLGPU_SRC})
 
-if(EMSCRIPTEN OR ANDROID OR NINTENDO_SWITCH)
-    target_compile_definitions(sdlgpu PRIVATE GLEW_STATIC SDL_GPU_DISABLE_GLES_1 SDL_GPU_DISABLE_GLES_3 SDL_GPU_DISABLE_OPENGL)
-else()
-    target_compile_definitions(sdlgpu PRIVATE GLEW_STATIC SDL_GPU_DISABLE_GLES SDL_GPU_DISABLE_OPENGL_3 SDL_GPU_DISABLE_OPENGL_4)
-endif()
+    if(EMSCRIPTEN OR ANDROID OR NINTENDO_SWITCH)
+        target_compile_definitions(sdlgpu PRIVATE GLEW_STATIC SDL_GPU_DISABLE_GLES_1 SDL_GPU_DISABLE_GLES_3 SDL_GPU_DISABLE_OPENGL)
+    else()
+        target_compile_definitions(sdlgpu PRIVATE GLEW_STATIC SDL_GPU_DISABLE_GLES SDL_GPU_DISABLE_OPENGL_3 SDL_GPU_DISABLE_OPENGL_4)
+    endif()
 
-target_include_directories(sdlgpu PUBLIC ${THIRDPARTY_DIR}/sdl-gpu/include)
-target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/glew)
-target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/glew/GL)
-target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/stb_image)
-target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/stb_image_write)
+    target_include_directories(sdlgpu PUBLIC ${THIRDPARTY_DIR}/sdl-gpu/include)
+    target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/glew)
+    target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/glew/GL)
+    target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/stb_image)
+    target_include_directories(sdlgpu PRIVATE ${THIRDPARTY_DIR}/sdl-gpu/src/externals/stb_image_write)
 
-if(WIN32)
-    target_link_libraries(sdlgpu opengl32)
-endif()
+    if(WIN32)
+        target_link_libraries(sdlgpu opengl32)
+    endif()
 
-if(LINUX)
-    target_link_libraries(sdlgpu GL)
-endif()
+    if(LINUX)
+        target_link_libraries(sdlgpu GL)
+    endif()
 
-if(APPLE)
-    find_library(OPENGL_LIBRARY OpenGL)
-    target_link_libraries(sdlgpu ${OPENGL_LIBRARY})
-endif()
+    if(APPLE)
+        find_library(OPENGL_LIBRARY OpenGL)
+        target_link_libraries(sdlgpu ${OPENGL_LIBRARY})
+    endif()
 
-if(ANDROID)
-    find_library( ANDROID_LOG_LIBRARY log )
-    find_library( ANDROID_GLES2_LIBRARY GLESv2 )
-    find_library( ANDROID_GLES1_LIBRARY GLESv1_CM )
-    target_link_libraries(sdlgpu
+    if(ANDROID)
+        find_library( ANDROID_LOG_LIBRARY log )
+        find_library( ANDROID_GLES2_LIBRARY GLESv2 )
+        find_library( ANDROID_GLES1_LIBRARY GLESv1_CM )
+        target_link_libraries(sdlgpu
         ${ANDROID_LOG_LIBRARY}
         ${ANDROID_GLES2_LIBRARY}
         ${ANDROID_GLES1_LIBRARY}
     )
-endif()
-
-if(NINTENDO_SWITCH)
-    find_package(PkgConfig REQUIRED)
-    pkg_search_module(GLES2 glesv2 REQUIRED IMPORTED_TARGET)
-    target_link_libraries(sdlgpu PkgConfig::GLES2)
-endif()
-
-if(NOT EMSCRIPTEN)
-    if(BUILD_STATIC)
-        target_link_libraries(sdlgpu SDL2-static)
-    else()
-        target_link_libraries(sdlgpu SDL2)
     endif()
-endif()
+
+    if(NINTENDO_SWITCH)
+        find_package(PkgConfig REQUIRED)
+        pkg_search_module(GLES2 glesv2 REQUIRED IMPORTED_TARGET)
+        target_link_libraries(sdlgpu PkgConfig::GLES2)
+    endif()
+
+    if(NOT EMSCRIPTEN)
+        if(BUILD_STATIC)
+            target_link_libraries(sdlgpu SDL2-static)
+        else()
+            target_link_libraries(sdlgpu SDL2)
+        endif()
+    endif()
 
 endif()
 
@@ -182,7 +182,36 @@ if(BUILD_SDL)
         set(TIC80_SRC ${TIC80_SRC} ${ANDROID_NDK}/sources/android/cpufeatures/cpu-features.c)
 
         add_library(${TIC80_TARGET} SHARED ${TIC80_SRC})
-
+    elseif(VITA)
+        if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+            if(DEFINED ENV{VITASDK})
+                set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE PATH "toolchain file")
+            else()
+                message(FATAL_ERROR "Please define VITASDK to point to your SDK path!")
+            endif()
+        endif()
+        include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
+        set(VITA_APP_NAME ${TIC80_TARGET})
+        set(VITA_TITLEID  "TIC000080")
+        set(VITA_VERSION  "01.00")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+        set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d PARENTAL_LEVEL=1")
+        if(BUILD_EDITORS)
+            target_include_directories(tic80studio
+                PRIVATE ${TIC80LIB_DIR}/studio)
+        endif()
+        add_executable(${TIC80_TARGET} ${TIC80_SRC})
+        target_link_libraries(${TIC80_TARGET} tic80studio png  SDL2::SDL2)
+        #vita_create_self("${TIC80_TARGET}.self" "${TIC80_TARGET}")
+        #vita_create_vpk("${TIC80_TARGET}.vpk" ${VITA_TITLEID} "${TIC80_TARGET}.self"
+        #    VERSION ${VITA_VERSION}
+        #    NAME ${TIC80_TARGET}
+        #    FILE sce_sys/icon0.png sce_sys/icon0.png
+        #    FILE sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
+        #    FILE sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
+        #    FILE sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+        #)
     else()
         add_executable(${TIC80_TARGET} ${TIC80_SRC})
     endif()
