@@ -87,6 +87,21 @@ if(VITA)
     target_sources(${TIC80_TARGET} PRIVATE
         ${CMAKE_SOURCE_DIR}/src/system/vita/runtime.c)
 
+    if(BUILD_SURF)
+        # tic_net lives with the studio, the same way the 3DS and Switch do it
+        target_sources(tic80studio PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/system/vita/net.c)
+
+        target_include_directories(tic80studio PRIVATE
+            ${TIC80LIB_DIR}/studio
+            ${THIRDPARTY_DIR}/sdl2/include)
+
+        target_link_libraries(tic80studio PRIVATE
+            SceHttp_stub
+            SceNet_stub
+            SceNetCtl_stub)
+    endif()
+
     target_link_libraries(${TIC80_TARGET}
         ScePower_stub
         SceAppMgr_stub

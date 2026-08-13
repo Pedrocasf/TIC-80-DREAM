@@ -24,6 +24,7 @@
 #include "fs.h"
 #include "net.h"
 #include "ext/json.h"
+#include "ext/md5.h"
 
 #if defined(BAREMETALPI)
   #ifdef EN_DEBUG
@@ -756,19 +757,55 @@ bool tic_fs_saveroot(tic_fs* fs, const char* name, const void* data, s32 size, b
     return fs_write(path, data, size);
 }
 
+// an md5 written out as lowercase hex, plus its terminator
+enum{HashSize = 16 * 2 + 1};
+
 typedef struct
 {
     tic_fs* fs;
     fs_load_callback done;
     void* data;
     char* cachePath;
+    char hash[HashSize];
 } LoadFileByHashData;
+
+// carts are asked for by the md5 of their contents and cached under it, so the
+// bytes that come back can be held to it. A cart that arrives damaged is
+// dropped rather than played and, worse, cached under a hash it does not have.
+static bool hashMatches(const char* hash, const void* data, s32 size)
+{
+    u8 digest[16];
+    MD5_CTX ctx;
+
+    MD5_Init(&ctx);
+    MD5_Update(&ctx, data, size);
+    MD5_Final(digest, &ctx);
+
+    char hex[sizeof digest * 2 + 1];
+
+    for (s32 i = 0; i < COUNT_OF(digest); i++)
+        snprintf(hex + i * 2, 3, "%02x", digest[i]);
+
+    for (s32 i = 0; i < COUNT_OF(hex) - 1; i++)
+    {
+        char c = hash[i];
+
+        if (c >= 'A' && c <= 'Z')
+            c = c - 'A' + 'a';
+
+        if (c != hex[i])
+            return false;
+    }
+
+    return hash[COUNT_OF(hex) - 1] == '\0';
+}
 
 static void fileByHashLoaded(const net_get_data* netData)
 {
     LoadFileByHashData* loadFileByHashData = netData->calldata;
 
-    if (netData->type == net_get_done)
+    if (netData->type == net_get_done
+        && hashMatches(loadFileByHashData->hash, netData->done.data, netData->done.size))
     {
         tic_fs_saveroot(loadFileByHashData->fs, loadFileByHashData->cachePath, netData->done.data, netData->done.size, false);
         loadFileByHashData->done(netData->done.data, netData->done.size, loadFileByHashData->data);
@@ -812,6 +849,8 @@ void tic_fs_hashload(tic_fs* fs, const char* name, const char* hash, fs_load_cal
     snprintf(path, sizeof path, "/cart/%s/%s", hash, name);
 
     LoadFileByHashData loadFileByHashData = { fs, callback, data, strdup(cachePath) };
+    strncpy(loadFileByHashData.hash, hash, sizeof loadFileByHashData.hash - 1);
+
     tic_net_get(fs->net, path, fileByHashLoaded, MOVE(loadFileByHashData));
 #endif
 

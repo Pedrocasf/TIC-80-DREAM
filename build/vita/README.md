@@ -45,9 +45,9 @@ the clocks.
 * It starts in SURF, the cart browser, since that is the one screen meant to be
   driven with a d-pad and there is no keyboard to type `surf` with. Up and down
   walk the list, left and right page through it, cross runs a cart, circle goes
-  up a directory and backs out to the console from the top. Whatever you drop in
-  `ux0:/data/tic80` is what it lists, there is no browsing tic80.com without
-  networking.
+  up a directory and backs out to the console from the top. It lists whatever
+  you drop in `ux0:/data/tic80` alongside tic80.com itself, so the whole library
+  is there to walk through with the d-pad.
 * The display is a pixel perfect fit: 960x544 is exactly four times TIC-80's
   240x136 screen, so the picture fills it with every pixel drawn as a 4x4
   square. The border around the screen has no room left and is cropped. Turning
@@ -75,5 +75,17 @@ the clocks.
   console, in the editors and in carts that ask for `input: keyboard`, unless a
   real keyboard is attached. SURF, the menu and regular games keep the whole
   screen and are driven with the buttons.
-* There is no networking: the online cart browser in SURF and
-  `CHECK_NEW_VERSION` do nothing on this platform.
+* Networking goes through `sceHttp` and **talks to tic80.com over plain http**,
+  not https. The console's TLS is of its own age: tic80.com wants TLS 1.2 at the
+  oldest and its certificate chains to a root from 2016, while the Vita's list
+  of trusted roots stopped being updated years before that. Every endpoint
+  TIC-80 needs answers over http, so the port asks for that rather than
+  pretending to a security it cannot deliver. The 3DS port does the same.
+
+  What that costs: anyone on the same network can see which carts you browse and
+  could alter what comes back. Carts are downloaded by the md5 of their contents
+  and that is now checked before one is played or cached, so a cart that arrives
+  altered or damaged is dropped. Note this is a check against corruption and
+  meddling with the download alone: the hash arrives over the same plain
+  connection as the cart, so anyone able to rewrite one can rewrite the other.
+  Carts run inside TIC-80's own sandbox either way.

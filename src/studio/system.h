@@ -37,7 +37,9 @@
 #define TIC_NAME_FULL TIC_NAME " tiny computer"
 #define TIC_TITLE TIC_NAME_FULL " " TIC_VERSION
 #define TIC_HOST "tic80.com"
-#if defined(__TIC_WIN7__)
+// the Vita speaks TLS of its own age and tic80.com no longer does, but
+// every endpoint it needs answers over plain http, see build/vita/README.md
+#if defined(__TIC_WIN7__) || defined(__TIC_VITA__)
     #define TIC_WEBSITE_PROTOCOL "http://"
 #else
     #define TIC_WEBSITE_PROTOCOL "https://"
