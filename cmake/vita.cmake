@@ -62,6 +62,28 @@ if(VITA)
 
     set(VITA_SCE_SYS ${CMAKE_SOURCE_DIR}/build/vita/sce_sys)
 
+    set(VITA_LIVEAREA
+        ${VITA_SCE_SYS}/icon0.png
+        ${VITA_SCE_SYS}/livearea/contents/bg.png
+        ${VITA_SCE_SYS}/livearea/contents/startup.png
+        ${VITA_SCE_SYS}/livearea/contents/template.xml)
+
+    # the installer is silent about malformed artwork until it aborts at 99% on
+    # the device, so gate the build on it and re-check whenever the art changes
+    set(VITA_ASSET_STAMP ${CMAKE_CURRENT_BINARY_DIR}/vita_assets_checked.stamp)
+
+    add_custom_command(OUTPUT ${VITA_ASSET_STAMP}
+        COMMAND ${CMAKE_COMMAND}
+            -DSCE_SYS=${VITA_SCE_SYS}
+            -P ${CMAKE_SOURCE_DIR}/cmake/vita_check_assets.cmake
+        COMMAND ${CMAKE_COMMAND} -E touch ${VITA_ASSET_STAMP}
+        DEPENDS ${VITA_LIVEAREA} ${CMAKE_SOURCE_DIR}/cmake/vita_check_assets.cmake
+        COMMENT "Checking LiveArea assets"
+        VERBATIM)
+
+    add_custom_target(vita-livearea DEPENDS ${VITA_ASSET_STAMP})
+    add_dependencies(${TIC80_TARGET} vita-livearea)
+
     target_sources(${TIC80_TARGET} PRIVATE
         ${CMAKE_SOURCE_DIR}/src/system/vita/runtime.c)
 
