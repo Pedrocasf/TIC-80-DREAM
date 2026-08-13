@@ -2306,6 +2306,23 @@ s32 main(s32 argc, char **argv)
     vita_init();
 #endif
 
+#if defined(__TIC_VITA__)
+    // Nothing passes arguments to a Vita app, and without a keyboard there is
+    // no way to type `surf` at the console either, so open the cart browser on
+    // startup: it is the one screen built to be driven with a d-pad. Circle
+    // backs out of it to the console. The console parses this in place, so it
+    // cannot be a literal.
+    if(argc <= 1)
+    {
+        static char name[] = "tic80";
+        static char surf[] = "--cmd=surf";
+        static char* args[] = {name, surf};
+
+        argc = COUNT_OF(args);
+        argv = args;
+    }
+#endif
+
     const char* folder = getAppFolder();
 
 #if defined(__EMSCRIPTEN__)

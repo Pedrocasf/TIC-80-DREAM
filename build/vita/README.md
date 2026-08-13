@@ -42,6 +42,12 @@ the clocks.
 * Carts, `config.tic` and everything else the studio writes live in
   `ux0:/data/tic80`. Drop your `.tic` files there and they show up in the
   console and in SURF.
+* It starts in SURF, the cart browser, since that is the one screen meant to be
+  driven with a d-pad and there is no keyboard to type `surf` with. Up and down
+  walk the list, left and right page through it, cross runs a cart, circle goes
+  up a directory and backs out to the console from the top. Whatever you drop in
+  `ux0:/data/tic80` is what it lists, there is no browsing tic80.com without
+  networking.
 * The display is a pixel perfect fit: 960x544 is exactly four times TIC-80's
   240x136 screen, so the picture fills it with every pixel drawn as a 4x4
   square. The border around the screen has no room left and is cropped. Turning
