@@ -186,6 +186,12 @@ static struct
         } touch;
 #endif
 
+#if defined(__TIC_VITA__)
+        // set once a real key arrives: the Vita has no other source of key
+        // events, so this means a USB or Bluetooth keyboard is attached
+        bool physical;
+#endif
+
     } keyboard;
 
     struct
@@ -889,6 +895,11 @@ static bool isKbdVisible()
 
 #if defined(__TIC_VITA__)
 
+    // a real keyboard is attached, it does not need half the screen taken up by
+    // a picture of one
+    if(platform.keyboard.physical)
+        return false;
+
     // it is drawn on top of the game view, so it always fits, but it should
     // only cover it when there is something to type: the console, the editors
     // and carts asking for the keyboard leave the gamepad off, while SURF, the
@@ -1340,6 +1351,10 @@ static void pollEvents()
 
         case SDL_KEYDOWN:
 
+#if defined(__TIC_VITA__)
+            platform.keyboard.physical = true;
+#endif
+
 #if defined(TOUCH_INPUT_SUPPORT)
             platform.keyboard.touch.useText = false;
             handleKeydown(event.key.keysym.sym, true, platform.keyboard.touch.state, NULL);
@@ -1387,6 +1402,17 @@ static void pollEvents()
 
 bool tic_sys_keyboard_text(char* text)
 {
+#if defined(__TIC_VITA__)
+
+    // SDL's Vita driver reads USB and Bluetooth keyboards over SceHid and turns
+    // them into key events, but it never sends the text events that go with
+    // them, so there is nothing to report here. Saying so lets the studio work
+    // the characters out from the keys instead, the same way it already does
+    // for the software keyboard.
+    return false;
+
+#endif
+
 #if defined(TOUCH_INPUT_SUPPORT)
     if(platform.keyboard.touch.useText)
         return false;

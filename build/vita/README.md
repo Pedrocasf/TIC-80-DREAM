@@ -51,10 +51,17 @@ the clocks.
   TIC-80 one: cross is `A`, circle is `B`, square is `X`, triangle is `Y`.
   `SELECT` opens the game menu.
 * The front touchscreen drives the mouse, the rear pad is left alone.
+* USB and Bluetooth keyboards work, and a real one is far nicer than the
+  software keyboard for the editors. Pair it in the Vita's settings **before**
+  starting TIC-80: SDL looks for a keyboard once, at startup, and does not pick
+  up one plugged in later. Press any key and the software keyboard gets out of
+  the way for the rest of the session. Mice work the same way.
+
+  SDL reports those keyboards as US layout whatever they are printed with, so
+  the punctuation on a non-US keyboard follows the US positions.
 * The software keyboard is drawn over the lower half of the screen in the
-  console, in the editors and in carts that ask for `input: keyboard`. SURF, the
-  menu and regular games keep the whole screen and are driven with the buttons.
-  A USB or Bluetooth keyboard (and mouse) works too, SDL2 picks them up through
-  SceHid.
+  console, in the editors and in carts that ask for `input: keyboard`, unless a
+  real keyboard is attached. SURF, the menu and regular games keep the whole
+  screen and are driven with the buttons.
 * There is no networking: the online cart browser in SURF and
   `CHECK_NEW_VERSION` do nothing on this platform.
