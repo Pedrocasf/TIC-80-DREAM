@@ -42,6 +42,11 @@ the clocks.
 * Carts, `config.tic` and everything else the studio writes live in
   `ux0:/data/tic80`. Drop your `.tic` files there and they show up in the
   console and in SURF.
+* The display is a pixel perfect fit: 960x544 is exactly four times TIC-80's
+  240x136 screen, so the picture fills it with every pixel drawn as a 4x4
+  square. The border around the screen has no room left and is cropped. Turning
+  `INTEGER SCALE` off in the menu shows that border again, at the cost of an
+  uneven 3.75x where some pixels come out a row wider than others.
 * The physical controls are gamepad #1, the PlayStation layout matches the
   TIC-80 one: cross is `A`, circle is `B`, square is `X`, triangle is `Y`.
   `SELECT` opens the game menu.

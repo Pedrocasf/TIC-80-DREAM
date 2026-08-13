@@ -68,6 +68,7 @@ extern void gotoMenu(Studio* studio);
 
 #if defined(__TIC_VITA__)
 #include "system/vita/vita.h"
+#include "tic_assert.h"
 // carts, configuration and saves live next to the other homebrew data
 #define VITA_APP_FOLDER "ux0:/data/tic80"
 // the only resolution the Vita display supports
@@ -653,6 +654,35 @@ static void calcTextureRect(SDL_Rect* rect)
     SDL_GetWindowSize(platform.window, &sw, &sh);
 
     enum{Width = TIC80_FULLWIDTH, Height = TIC80_FULLHEIGHT};
+
+#if defined(__TIC_VITA__)
+
+    // 960x544 is exactly four times TIC-80's 240x136 screen, so with integer
+    // scaling the picture covers the display to the pixel. What gets drawn is
+    // the larger frame that carries the border around that screen, so place it
+    // by its border and let the border fall off the edges of the display. The
+    // rect stays in full frame terms, which is what the mouse mapping and the
+    // renderer below both expect of it.
+    if(integerScale)
+    {
+        enum{Scale = VITA_SCREEN_WIDTH / TIC80_WIDTH};
+
+        // the fit is exact rather than approximate, keep it honest
+        static_assert(VITA_SCREEN_WIDTH == TIC80_WIDTH * Scale, "vita width");
+        static_assert(VITA_SCREEN_HEIGHT == TIC80_HEIGHT * Scale, "vita height");
+
+        *rect = (SDL_Rect)
+        {
+            -TIC80_OFFSET_LEFT * Scale,
+            -TIC80_OFFSET_TOP * Scale,
+            Width * Scale,
+            Height * Scale,
+        };
+
+        return;
+    }
+
+#endif
 
     if (sw * Height < sh * Width)
     {
@@ -1920,7 +1950,12 @@ static void gpuTick()
             {rect.x, rect.y, rect.w, rect.h},                           // screen
         };
 
-        for(s32 i = 0; i < COUNT_OF(Src); ++i)
+        // the first four fill the window around the picture with the border
+        // color; when the picture runs past the edges of the window instead
+        // there is nothing to fill and those rects come out empty or negative
+        const s32 first = rect.x < 0 || rect.y < 0 ? COUNT_OF(Src) - 1 : 0;
+
+        for(s32 i = first; i < COUNT_OF(Src); ++i)
             renderCopy(platform.screen.renderer, platform.screen.texture, Src[i], Dst[i]);
     }
 
