@@ -82,6 +82,15 @@ if(VITA)
     set_target_properties(${TIC80_TARGET} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+    # nothing in SDL guarantees the shader alignment the -O2 above buys us, and
+    # losing it costs a black screen on the device rather than a build error
+    add_custom_command(TARGET ${TIC80_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DNM=${CMAKE_NM}
+            -DELF=$<TARGET_FILE:${TIC80_TARGET}>
+            -P ${CMAKE_SOURCE_DIR}/cmake/vita_check_alignment.cmake
+        VERBATIM)
+
     vita_create_self(${TIC80_TARGET}.self ${TIC80_TARGET} UNSAFE)
 
     vita_create_vpk(${TIC80_TARGET}.vpk ${VITA_TITLEID} ${TIC80_TARGET}.self
