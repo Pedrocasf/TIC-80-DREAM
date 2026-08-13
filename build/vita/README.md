@@ -51,11 +51,17 @@ the clocks.
   TIC-80 one: cross is `A`, circle is `B`, square is `X`, triangle is `Y`.
   `SELECT` opens the game menu.
 * The front touchscreen drives the mouse, the rear pad is left alone.
-* USB and Bluetooth keyboards work, and a real one is far nicer than the
-  software keyboard for the editors. Pair it in the Vita's settings **before**
-  starting TIC-80: SDL looks for a keyboard once, at startup, and does not pick
-  up one plugged in later. Press any key and the software keyboard gets out of
-  the way for the rest of the session. Mice work the same way.
+* Keyboards work, and a real one is far nicer than the software keyboard for the
+  editors. Pair it in the Vita's settings **before** starting TIC-80: SDL looks
+  for a keyboard once, at startup, and does not pick up one connected later.
+  Press any key and the software keyboard gets out of the way for the rest of
+  the session. Mice work the same way.
+
+  The console speaks classic Bluetooth HID and has no Low Energy support, so a
+  BLE only keyboard never turns up in its scan however long you look. Check the
+  keyboard for Bluetooth 2.1, 3.0 or "BR/EDR"; anything sold as 4.0 LE or
+  Bluetooth Low Energy will not pair. Wired USB keyboards only work on a
+  PlayStation TV, the handheld's port cannot host them.
 
   SDL reports those keyboards as US layout whatever they are printed with, so
   the punctuation on a non-US keyboard follows the US positions.
