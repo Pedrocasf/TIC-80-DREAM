@@ -62,8 +62,18 @@ extern void gotoMenu(Studio* studio);
 #include <windows.h>
 #endif
 
-#if defined(__TIC_ANDROID__) || defined(__SWITCH__)
+#if defined(__TIC_ANDROID__) || defined(__SWITCH__) || defined(__TIC_VITA__)
 #include <sys/stat.h>
+#endif
+
+#if defined(__TIC_VITA__)
+#include "system/vita/vita.h"
+#include "tic_assert.h"
+// carts, configuration and saves live next to the other homebrew data
+#define VITA_APP_FOLDER "ux0:/data/tic80"
+// the only resolution the Vita display supports
+#define VITA_SCREEN_WIDTH 960
+#define VITA_SCREEN_HEIGHT 544
 #endif
 
 #if defined(TOUCH_INPUT_SUPPORT)
@@ -174,6 +184,12 @@ static struct
             bool useText;
 
         } touch;
+#endif
+
+#if defined(__TIC_VITA__)
+        // set once a real key arrives: the Vita has no other source of key
+        // events, so this means a USB or Bluetooth keyboard is attached
+        bool physical;
 #endif
 
     } keyboard;
@@ -584,8 +600,14 @@ static void initGPU()
             | (!soft && vsync ? SDL_RENDERER_PRESENTVSYNC : 0)
         );
 
+        if(!platform.screen.renderer.sdl)
+            SDL_Log("Unable to create renderer: %s\n", SDL_GetError());
+
         platform.screen.texture.sdl = SDL_CreateTexture(platform.screen.renderer.sdl, SDL_PIXELFORMAT_ABGR8888,
             SDL_TEXTUREACCESS_STREAMING, TIC80_FULLWIDTH, TIC80_FULLHEIGHT);
+
+        if(!platform.screen.texture.sdl)
+            SDL_Log("Unable to create screen texture: %s\n", SDL_GetError());
     }
 
 #if defined(TOUCH_INPUT_SUPPORT)
@@ -638,6 +660,35 @@ static void calcTextureRect(SDL_Rect* rect)
     SDL_GetWindowSize(platform.window, &sw, &sh);
 
     enum{Width = TIC80_FULLWIDTH, Height = TIC80_FULLHEIGHT};
+
+#if defined(__TIC_VITA__)
+
+    // 960x544 is exactly four times TIC-80's 240x136 screen, so with integer
+    // scaling the picture covers the display to the pixel. What gets drawn is
+    // the larger frame that carries the border around that screen, so place it
+    // by its border and let the border fall off the edges of the display. The
+    // rect stays in full frame terms, which is what the mouse mapping and the
+    // renderer below both expect of it.
+    if(integerScale)
+    {
+        enum{Scale = VITA_SCREEN_WIDTH / TIC80_WIDTH};
+
+        // the fit is exact rather than approximate, keep it honest
+        static_assert(VITA_SCREEN_WIDTH == TIC80_WIDTH * Scale, "vita width");
+        static_assert(VITA_SCREEN_HEIGHT == TIC80_HEIGHT * Scale, "vita height");
+
+        *rect = (SDL_Rect)
+        {
+            -TIC80_OFFSET_LEFT * Scale,
+            -TIC80_OFFSET_TOP * Scale,
+            Width * Scale,
+            Height * Scale,
+        };
+
+        return;
+    }
+
+#endif
 
     if (sw * Height < sh * Width)
     {
@@ -756,6 +807,17 @@ static void processKeyboard()
 
 #if defined(TOUCH_INPUT_SUPPORT)
 
+// the Vita reports its rear pad as a touch device too, that one is where the
+// hands rest while holding the console, only the front panel is an input
+static bool isTouchScreen(SDL_TouchID id)
+{
+#if defined(__TIC_VITA__)
+    return id == 1;
+#else
+    return true;
+#endif
+}
+
 static bool checkTouch(const SDL_Rect* rect, s32* x, s32* y)
 {
     s32 devices = SDL_GetNumTouchDevices();
@@ -766,6 +828,7 @@ static bool checkTouch(const SDL_Rect* rect, s32* x, s32* y)
     {
         SDL_TouchID id = SDL_GetTouchDevice(i);
 
+        if(isTouchScreen(id))
         {
             s32 fingers = SDL_GetNumTouchFingers(id);
 
@@ -792,13 +855,58 @@ static bool checkTouch(const SDL_Rect* rect, s32* x, s32* y)
 
 static bool isGamepadVisible()
 {
+#if defined(__TIC_VITA__)
+    // the Vita has a real d-pad and real buttons, the touch overlay would only
+    // cover the game, the touchscreen is left to the virtual keyboard
+    return false;
+#else
     return studio_mem(platform.studio)->input.gamepad;
+#endif
+}
+
+// where the software keyboard is drawn and where it takes its touches from
+static void calcKeyboardRect(SDL_Rect* rect)
+{
+    enum{Cols = KBD_COLS, Rows = KBD_ROWS};
+
+    s32 w, h;
+    SDL_GetWindowSize(platform.window, &w, &h);
+
+#if defined(__TIC_VITA__)
+
+    // a 960x544 screen has no room left under the game view, so the keyboard
+    // overlaps it, sitting centered on the lower half of the display
+    const s32 kh = h / 2;
+    const s32 kw = kh * Cols / Rows;
+
+    *rect = (SDL_Rect){(w - kw) / 2, h - kh, kw, kh};
+
+#else
+
+    *rect = (SDL_Rect){0, h - Rows * w / Cols, w, Rows * w / Cols};
+
+#endif
 }
 
 static bool isKbdVisible()
 {
     if(!studio_mem(platform.studio)->input.keyboard)
         return false;
+
+#if defined(__TIC_VITA__)
+
+    // a real keyboard is attached, it does not need half the screen taken up by
+    // a picture of one
+    if(platform.keyboard.physical)
+        return false;
+
+    // it is drawn on top of the game view, so it always fits, but it should
+    // only cover it when there is something to type: the console, the editors
+    // and carts asking for the keyboard leave the gamepad off, while SURF, the
+    // menu and regular games keep it on and are played with the real buttons
+    return !studio_mem(platform.studio)->input.gamepad;
+
+#else
 
     s32 w, h;
     SDL_GetWindowSize(platform.window, &w, &h);
@@ -811,6 +919,8 @@ static bool isKbdVisible()
         && !SDL_IsTextInputActive()
 #endif
         ;
+
+#endif
 }
 
 static const tic_key KbdLayout[] =
@@ -822,14 +932,12 @@ static void processTouchKeyboardButton(SDL_Point pt)
 {
     enum{Cols = KBD_COLS, Rows = KBD_ROWS};
 
-    s32 w, h;
-    SDL_GetWindowSize(platform.window, &w, &h);
-
-    SDL_Rect kbd = {0, h - Rows * w / Cols, w, Rows * w / Cols};
+    SDL_Rect kbd;
+    calcKeyboardRect(&kbd);
 
     if(SDL_PointInRect(&pt, &kbd))
     {
-        tic_point pos = {(pt.x - kbd.x) * Cols / w, (pt.y - kbd.y) * Cols / w};
+        tic_point pos = {(pt.x - kbd.x) * Cols / kbd.w, (pt.y - kbd.y) * Rows / kbd.h};
         platform.keyboard.touch.state[KbdLayout[pos.x + pos.y * Cols]] = true;
         platform.keyboard.touch.useText = true;
     }
@@ -852,6 +960,10 @@ static void processTouchKeyboard()
     for (s32 i = 0; i < devices; i++)
     {
         SDL_TouchID id = SDL_GetTouchDevice(i);
+
+        if(!isTouchScreen(id))
+            continue;
+
         s32 fingers = SDL_GetNumTouchFingers(id);
 
         for (s32 f = 0; f < fingers; f++)
@@ -1040,11 +1152,15 @@ static void processTouchInput()
     s32 devices = SDL_GetNumTouchDevices();
 
     for (s32 i = 0; i < devices; i++)
-        if(SDL_GetNumTouchFingers(SDL_GetTouchDevice(i)) > 0)
+    {
+        SDL_TouchID id = SDL_GetTouchDevice(i);
+
+        if(isTouchScreen(id) && SDL_GetNumTouchFingers(id) > 0)
         {
             platform.gamepad.touch.counter = TOUCH_TIMEOUT;
             break;
         }
+    }
 
     if(isGamepadVisible())
         processTouchGamepad();
@@ -1235,6 +1351,10 @@ static void pollEvents()
 
         case SDL_KEYDOWN:
 
+#if defined(__TIC_VITA__)
+            platform.keyboard.physical = true;
+#endif
+
 #if defined(TOUCH_INPUT_SUPPORT)
             platform.keyboard.touch.useText = false;
             handleKeydown(event.key.keysym.sym, true, platform.keyboard.touch.state, NULL);
@@ -1282,6 +1402,17 @@ static void pollEvents()
 
 bool tic_sys_keyboard_text(char* text)
 {
+#if defined(__TIC_VITA__)
+
+    // SDL's Vita driver reads USB and Bluetooth keyboards over SceHid and turns
+    // them into key events, but it never sends the text events that go with
+    // them, so there is nothing to report here. Saying so lets the studio work
+    // the characters out from the keys instead, the same way it already does
+    // for the software keyboard.
+    return false;
+
+#endif
+
 #if defined(TOUCH_INPUT_SUPPORT)
     if(platform.keyboard.touch.useText)
         return false;
@@ -1297,11 +1428,10 @@ static void renderKeyboard()
 {
     if(!isKbdVisible()) return;
 
-    SDL_Rect rect;
-    SDL_GetWindowSize(platform.window, &rect.w, &rect.h);
-
     SDL_Rect src = {TIC80_OFFSET_LEFT, TIC80_OFFSET_TOP, KBD_COLS*TIC_SPRITESIZE, KBD_ROWS*TIC_SPRITESIZE};
-    SDL_Rect dst = {0, rect.h - src.h * rect.w / src.w, rect.w, src.h * rect.w / src.w};
+
+    SDL_Rect dst;
+    calcKeyboardRect(&dst);
 
     renderCopy(platform.screen.renderer, platform.keyboard.touch.texture.up, src, dst);
 
@@ -1329,10 +1459,10 @@ static void renderKeyboard()
 
                     SDL_Rect dst2 =
                     {
-                        (src2.x - TIC80_OFFSET_LEFT) * rect.w/src.w,
-                        (src2.y - TIC80_OFFSET_TOP) * rect.w/src.w + dst.y,
-                        TIC_SPRITESIZE * rect.w/src.w,
-                        TIC_SPRITESIZE * rect.w/src.w,
+                        (src2.x - TIC80_OFFSET_LEFT) * dst.w/src.w + dst.x,
+                        (src2.y - TIC80_OFFSET_TOP) * dst.w/src.w + dst.y,
+                        TIC_SPRITESIZE * dst.w/src.w,
+                        TIC_SPRITESIZE * dst.w/src.w,
                     };
 
                     renderCopy(platform.screen.renderer, platform.keyboard.touch.texture.down, src2, dst2);
@@ -1409,6 +1539,11 @@ static const char* getAppFolder()
 #elif defined(__SWITCH__)
 
         strcpy(appFolder, "/switch/tic80");
+        mkdir(appFolder, 0777);
+
+#elif defined(__TIC_VITA__)
+
+        strcpy(appFolder, VITA_APP_FOLDER);
         mkdir(appFolder, 0777);
 
 #else
@@ -1841,7 +1976,12 @@ static void gpuTick()
             {rect.x, rect.y, rect.w, rect.h},                           // screen
         };
 
-        for(s32 i = 0; i < COUNT_OF(Src); ++i)
+        // the first four fill the window around the picture with the border
+        // color; when the picture runs past the edges of the window instead
+        // there is nothing to fill and those rects come out empty or negative
+        const s32 first = rect.x < 0 || rect.y < 0 ? COUNT_OF(Src) - 1 : 0;
+
+        for(s32 i = first; i < COUNT_OF(Src); ++i)
             renderCopy(platform.screen.renderer, platform.screen.texture, Src[i], Dst[i]);
     }
 
@@ -1944,6 +2084,13 @@ static s32 start(s32 argc, char **argv, const char* folder)
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
 #endif
 
+#if defined(__TIC_VITA__)
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
+    // "0" is the front panel: only it moves the mouse cursor, otherwise holding
+    // the console with a finger on the back pad fires random clicks
+    SDL_SetHint(SDL_HINT_VITA_TOUCH_MOUSE_DEVICE, "0");
+#endif
+
     int result = SDL_Init(SDL_INIT_VIDEO);
     if (result != 0)
     {
@@ -1977,6 +2124,13 @@ static s32 start(s32 argc, char **argv, const char* folder)
             initSound();
 
             {
+#if defined(__TIC_VITA__)
+                // the window is the whole screen, SDL scales nothing for us there
+                const s32 Width = VITA_SCREEN_WIDTH;
+                const s32 Height = VITA_SCREEN_HEIGHT;
+
+                s32 flags = SDL_WINDOW_SHOWN;
+#else
                 const s32 Width = TIC80_FULLWIDTH * studio_config(platform.studio)->uiScale;
                 const s32 Height = TIC80_FULLHEIGHT * studio_config(platform.studio)->uiScale;
 
@@ -1985,6 +2139,7 @@ static s32 start(s32 argc, char **argv, const char* folder)
                         | SDL_WINDOW_ALLOW_HIGHDPI
 #endif
                         | SDL_WINDOW_RESIZABLE;
+#endif
 
 #if defined(CRT_SHADER_SUPPORT)
 
@@ -1993,6 +2148,9 @@ static s32 start(s32 argc, char **argv, const char* folder)
 #endif
 
                 platform.window = SDL_CreateWindow(TIC_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, Width, Height, flags);
+
+                if(!platform.window)
+                    SDL_Log("Unable to create window: %s\n", SDL_GetError());
 
                 setWindowIcon();
                 initGPU();
@@ -2144,6 +2302,25 @@ s32 main(s32 argc, char **argv)
     }
 #elif defined(__TIC_LINUX__)
     signal(SIGPIPE, SIG_IGN);
+#elif defined(__TIC_VITA__)
+    vita_init();
+#endif
+
+#if defined(__TIC_VITA__)
+    // Nothing passes arguments to a Vita app, and without a keyboard there is
+    // no way to type `surf` at the console either, so open the cart browser on
+    // startup: it is the one screen built to be driven with a d-pad. Circle
+    // backs out of it to the console. The console parses this in place, so it
+    // cannot be a literal.
+    if(argc <= 1)
+    {
+        static char name[] = "tic80";
+        static char surf[] = "--cmd=surf";
+        static char* args[] = {name, surf};
+
+        argc = COUNT_OF(args);
+        argv = args;
+    }
 #endif
 
     const char* folder = getAppFolder();

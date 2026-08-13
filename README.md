@@ -34,6 +34,7 @@
       - [Raspberry Pi (Retropie)](#raspberry-pi-retropie)
   - [Mac](#mac)
   - [FreeBSD](#freebsd)
+  - [PS Vita](#ps-vita)
 - [Install Instructions](#install-instructions)
   - [Linux](#linux-1)
   - [Android](#android)
@@ -369,6 +370,24 @@ Mesa looks for swrast_dri.so from the wrong path, so also symlink it:
 ```
 sudo ln -s /usr/local/lib/dri/swrast_dri.so /usr/local/lib/dri-devel/
 ```
+
+## PS Vita
+install [VitaSDK](https://vitasdk.org), make sure `$VITASDK` points at it and
+that `$VITASDK/bin` is in your `$PATH`
+
+run the following commands in the Terminal
+```
+git clone --recursive https://github.com/nesbox/TIC-80 && cd TIC-80
+cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_ALL=ON \
+  -DBUILD_WITH_JS=OFF -DBUILD_WITH_SCHEME=OFF -DBUILD_WITH_RUBY=OFF -DBUILD_WITH_YUE=OFF
+cmake --build build --parallel
+```
+
+You'll find `tic80.vpk` in `TIC-80/build`, install it with VitaShell.
+
+See [build/vita/README.md](build/vita/README.md) for the controls and for where
+the cartridges live on the device.
 
 # Install instructions
 

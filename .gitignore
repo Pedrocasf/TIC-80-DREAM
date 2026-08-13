@@ -194,3 +194,9 @@ build/*.map
 # 3ds files
 *.3dsx
 *.smdh
+# vita
+build/tic80
+build/*.velf
+build/*.self*
+build/*.vpk*
+build/*.stamp

@@ -42,6 +42,10 @@
 #           define __TIC_WIN7__ 1
 #       endif
 #   endif
+#   if defined(__vita__) || defined(__VITA__)
+#       undef __TIC_VITA__
+#       define __TIC_VITA__ 1
+#   endif
 #   if defined(ANDROID) || defined(__ANDROID__)
 #       undef __TIC_ANDROID__
 #       define __TIC_ANDROID__ 1
@@ -75,6 +79,6 @@
 #   endif
 #endif
 
-#if defined(ANDROID) || defined(__ANDROID__) || defined(BAREMETALPI) || defined(__3DS__) || defined(__SWITCH__)
+#if defined(ANDROID) || defined(__ANDROID__) || defined(BAREMETALPI) || defined(__3DS__) || defined(__SWITCH__) || defined(__TIC_VITA__)
 #   define TIC80_FFT_UNSUPPORTED 1
 #endif

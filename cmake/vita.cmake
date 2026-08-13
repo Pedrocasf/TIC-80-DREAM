@@ -1,0 +1,141 @@
+################################
+# TIC-80 app (PS Vita)
+################################
+
+# vita-elf-create cannot translate the GOT relocations -fPIC emits, and a couple
+# of the vendored libraries (zip, pocketpy) turn it on for themselves
+function(vita_disable_pic dir)
+    get_property(targets DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target ${targets})
+        get_target_property(type ${target} TYPE)
+        if(NOT type STREQUAL "INTERFACE_LIBRARY" AND NOT type STREQUAL "UTILITY")
+            set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+        endif()
+    endforeach()
+
+    get_property(subdirs DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
+    foreach(subdir ${subdirs})
+        vita_disable_pic(${subdir})
+    endforeach()
+endfunction()
+
+if(VITA)
+
+    vita_disable_pic(${CMAKE_SOURCE_DIR})
+
+    if(NOT DEFINED VITASDK)
+        set(VITASDK $ENV{VITASDK})
+    endif()
+
+    # vita_create_self / vita_create_vpk
+    include("${VITASDK}/share/vita.cmake" REQUIRED)
+
+    set(VITA_APP_NAME "TIC-80")
+    set(VITA_TITLEID  "TIC80VITA")
+
+    # PARAM.SFO wants a strict "XX.YY" application version
+    string(LENGTH "${VERSION_MAJOR}" VITA_VER_LEN)
+    if(VITA_VER_LEN EQUAL 1)
+        set(VITA_VER_MAJOR "0${VERSION_MAJOR}")
+    else()
+        set(VITA_VER_MAJOR "${VERSION_MAJOR}")
+    endif()
+
+    string(LENGTH "${VERSION_MINOR}" VITA_VER_LEN)
+    if(VITA_VER_LEN EQUAL 1)
+        set(VITA_VER_MINOR "0${VERSION_MINOR}")
+    else()
+        set(VITA_VER_MINOR "${VERSION_MINOR}")
+    endif()
+
+    set(VITA_VERSION "${VITA_VER_MAJOR}.${VITA_VER_MINOR}")
+
+    # SDL's GXM renderer keeps its shaders in plain `unsigned char` arrays and
+    # casts them to SceGxmProgram*, which gxm only accepts 4 byte aligned. GCC
+    # pads data objects up to a word boundary only when it is not optimizing for
+    # size, so -Os leaves every shader on an odd address and the renderer dies
+    # with SCE_GXM_ERROR_INVALID_ALIGNMENT, i.e. a black screen. Build SDL at -O2
+    # so the alignment upstream relies on is there in a MinSizeRel build too.
+    if(TARGET SDL2-static)
+        target_compile_options(SDL2-static PRIVATE -O2)
+    endif()
+
+    set(VITA_SCE_SYS ${CMAKE_SOURCE_DIR}/build/vita/sce_sys)
+
+    set(VITA_LIVEAREA
+        ${VITA_SCE_SYS}/icon0.png
+        ${VITA_SCE_SYS}/livearea/contents/bg.png
+        ${VITA_SCE_SYS}/livearea/contents/startup.png
+        ${VITA_SCE_SYS}/livearea/contents/template.xml)
+
+    # the installer is silent about malformed artwork until it aborts at 99% on
+    # the device, so gate the build on it and re-check whenever the art changes
+    set(VITA_ASSET_STAMP ${CMAKE_CURRENT_BINARY_DIR}/vita_assets_checked.stamp)
+
+    add_custom_command(OUTPUT ${VITA_ASSET_STAMP}
+        COMMAND ${CMAKE_COMMAND}
+            -DSCE_SYS=${VITA_SCE_SYS}
+            -P ${CMAKE_SOURCE_DIR}/cmake/vita_check_assets.cmake
+        COMMAND ${CMAKE_COMMAND} -E touch ${VITA_ASSET_STAMP}
+        DEPENDS ${VITA_LIVEAREA} ${CMAKE_SOURCE_DIR}/cmake/vita_check_assets.cmake
+        COMMENT "Checking LiveArea assets"
+        VERBATIM)
+
+    add_custom_target(vita-livearea DEPENDS ${VITA_ASSET_STAMP})
+    add_dependencies(${TIC80_TARGET} vita-livearea)
+
+    target_sources(${TIC80_TARGET} PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/system/vita/runtime.c)
+
+    if(BUILD_SURF)
+        # tic_net lives with the studio, the same way the 3DS and Switch do it
+        target_sources(tic80studio PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/system/vita/net.c)
+
+        target_include_directories(tic80studio PRIVATE
+            ${TIC80LIB_DIR}/studio
+            ${THIRDPARTY_DIR}/sdl2/include)
+
+        target_link_libraries(tic80studio PRIVATE
+            SceHttp_stub
+            SceNet_stub
+            SceNetCtl_stub)
+    endif()
+
+    target_link_libraries(${TIC80_TARGET}
+        ScePower_stub
+        SceAppMgr_stub
+        SceAppUtil_stub
+        SceSysmodule_stub
+        SceIofilemgr_stub
+        SceProcessmgr_stub
+        m)
+
+    # vita-elf-create needs the relocation info kept in the executable
+    target_link_options(${TIC80_TARGET} PRIVATE -Wl,-q)
+
+    # vita_create_self() looks the executable up next to the .self it builds,
+    # so the ARM elf goes to the build root instead of bin/
+    set_target_properties(${TIC80_TARGET} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+    # nothing in SDL guarantees the shader alignment the -O2 above buys us, and
+    # losing it costs a black screen on the device rather than a build error
+    add_custom_command(TARGET ${TIC80_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DNM=${CMAKE_NM}
+            -DELF=$<TARGET_FILE:${TIC80_TARGET}>
+            -P ${CMAKE_SOURCE_DIR}/cmake/vita_check_alignment.cmake
+        VERBATIM)
+
+    vita_create_self(${TIC80_TARGET}.self ${TIC80_TARGET} UNSAFE)
+
+    vita_create_vpk(${TIC80_TARGET}.vpk ${VITA_TITLEID} ${TIC80_TARGET}.self
+        VERSION ${VITA_VERSION}
+        NAME    ${VITA_APP_NAME}
+        FILE ${VITA_SCE_SYS}/icon0.png                      sce_sys/icon0.png
+        FILE ${VITA_SCE_SYS}/livearea/contents/bg.png        sce_sys/livearea/contents/bg.png
+        FILE ${VITA_SCE_SYS}/livearea/contents/startup.png   sce_sys/livearea/contents/startup.png
+        FILE ${VITA_SCE_SYS}/livearea/contents/template.xml  sce_sys/livearea/contents/template.xml)
+
+endif()
