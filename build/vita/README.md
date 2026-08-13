@@ -13,7 +13,7 @@ SDL2 is built from `vendor/sdl2`, no extra vdpm package is needed.
 
 ```
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake \
-  -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_WITH_ALL=ON \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_ALL=ON \
   -DBUILD_WITH_JS=OFF -DBUILD_WITH_SCHEME=OFF -DBUILD_WITH_RUBY=OFF -DBUILD_WITH_YUE=OFF
 cmake --build build --parallel
 ```
@@ -30,6 +30,12 @@ because they do not build against the newlib the toolchain ships:
 * `BUILD_WITH_YUE` — yuescript needs more C++ than the toolchain provides
 
 That leaves Lua, Moonscript, Fennel, Wren, Squirrel, Python, Janet and WASM.
+
+`Release` rather than the `MinSizeRel` the other console ports build with: at
+-O3 the same workload measurably runs faster on the hardware, which is what
+matters on a 444MHz machine running a script interpreter, and it costs about
+30% on the size of the package. SDL is held at -O2 within that, see the note in
+`cmake/vita.cmake` about what its shaders need.
 
 ## Installing
 

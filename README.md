@@ -379,7 +379,7 @@ run the following commands in the Terminal
 ```
 git clone --recursive https://github.com/nesbox/TIC-80 && cd TIC-80
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake \
-  -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_WITH_ALL=ON \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_ALL=ON \
   -DBUILD_WITH_JS=OFF -DBUILD_WITH_SCHEME=OFF -DBUILD_WITH_RUBY=OFF -DBUILD_WITH_YUE=OFF
 cmake --build build --parallel
 ```
