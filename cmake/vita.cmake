@@ -50,6 +50,16 @@ if(VITA)
 
     set(VITA_VERSION "${VITA_VER_MAJOR}.${VITA_VER_MINOR}")
 
+    # SDL's GXM renderer keeps its shaders in plain `unsigned char` arrays and
+    # casts them to SceGxmProgram*, which gxm only accepts 4 byte aligned. GCC
+    # pads data objects up to a word boundary only when it is not optimizing for
+    # size, so -Os leaves every shader on an odd address and the renderer dies
+    # with SCE_GXM_ERROR_INVALID_ALIGNMENT, i.e. a black screen. Build SDL at -O2
+    # so the alignment upstream relies on is there in a MinSizeRel build too.
+    if(TARGET SDL2-static)
+        target_compile_options(SDL2-static PRIVATE -O2)
+    endif()
+
     set(VITA_SCE_SYS ${CMAKE_SOURCE_DIR}/build/vita/sce_sys)
 
     target_sources(${TIC80_TARGET} PRIVATE

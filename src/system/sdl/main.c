@@ -593,8 +593,14 @@ static void initGPU()
             | (!soft && vsync ? SDL_RENDERER_PRESENTVSYNC : 0)
         );
 
+        if(!platform.screen.renderer.sdl)
+            SDL_Log("Unable to create renderer: %s\n", SDL_GetError());
+
         platform.screen.texture.sdl = SDL_CreateTexture(platform.screen.renderer.sdl, SDL_PIXELFORMAT_ABGR8888,
             SDL_TEXTUREACCESS_STREAMING, TIC80_FULLWIDTH, TIC80_FULLHEIGHT);
+
+        if(!platform.screen.texture.sdl)
+            SDL_Log("Unable to create screen texture: %s\n", SDL_GetError());
     }
 
 #if defined(TOUCH_INPUT_SUPPORT)
@@ -2081,6 +2087,9 @@ static s32 start(s32 argc, char **argv, const char* folder)
 #endif
 
                 platform.window = SDL_CreateWindow(TIC_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, Width, Height, flags);
+
+                if(!platform.window)
+                    SDL_Log("Unable to create window: %s\n", SDL_GetError());
 
                 setWindowIcon();
                 initGPU();
