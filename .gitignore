@@ -199,3 +199,4 @@ build/tic80
 build/*.velf
 build/*.self*
 build/*.vpk*
+build/*.stamp
