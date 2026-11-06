@@ -21,9 +21,13 @@
 // SOFTWARE.
 
 #include "config.h"
+#include "studio/paths.h"
 #include "fs.h"
 #include "cart.h"
+#include "tools.h"
 #include "ext/json.h"
+
+#include <stdio.h>
 
 #if defined(__EMSCRIPTEN__)
 #define DEFAULT_VSYNC 0
@@ -31,17 +35,18 @@
 #define DEFAULT_VSYNC 1
 #endif
 
-#if defined(__TIC_ANDROID__)
+// Integer scale leaves black borders around the picture wherever the window
+// is not a whole multiple of it, and the picture is what the machine is for:
+// off by default everywhere. The web export page used to force it off by
+// writing options.json (and, being IDBFS, wrote it into a file every TIC-80
+// page on the origin shares); the default does the job instead.
 #define INTEGER_SCALE_DEFAULT false
-#else
-#define INTEGER_SCALE_DEFAULT true
-#endif
 
 static void readConfig(Config* config)
 {
     const char* json = config->cart->code.data;
 
-    if(json_parse(json, strlen(json)))
+    if(json_parse(json, (s32)(strlen(json))))
     {
         config->data.checkNewVersion = json_bool("CHECK_NEW_VERSION", 0);
         config->data.uiScale = json_int("UI_SCALE", 0);
@@ -51,23 +56,20 @@ static void readConfig(Config* config)
         if(config->data.uiScale <= 0)
             config->data.uiScale = 1;
 
-        config->data.theme.gamepad.touch.alpha = json_int("GAMEPAD_TOUCH_ALPHA", 0);
+        config->data.theme.gamepad.touch.alpha = (u8)(json_int("GAMEPAD_TOUCH_ALPHA", 0));
 
         s32 theme = json_object("CODE_THEME", 0);
 
-#define CODE_COLOR_DEF(VAR) config->data.theme.code.VAR = json_int(#VAR, theme);
+#define CODE_COLOR_DEF(VAR) config->data.theme.code.VAR = (u8)json_int(#VAR, theme);
         CODE_COLORS_LIST(CODE_COLOR_DEF)
-#undef  CODE_COLOR_DEF
+#undef CODE_COLOR_DEF
 
-        config->data.theme.code.select = json_int("SELECT", theme);
-        config->data.theme.code.cursor = json_int("CURSOR", theme);
+        config->data.theme.code.select = (u8)(json_int("SELECT", theme));
+        config->data.theme.code.cursor = (u8)(json_int("CURSOR", theme));
 
-        config->data.theme.code.shadow = json_bool("SHADOW", theme);
-        config->data.theme.code.altFont = json_bool("ALT_FONT", theme);
         config->data.theme.code.altCaret = json_bool("ALT_CARET", theme);
         config->data.theme.code.matchDelimiters = json_bool("MATCH_DELIMITERS", theme);
         config->data.theme.code.autoDelimiters = json_bool("AUTO_DELIMITERS", theme);
-
     }
 }
 
@@ -76,53 +78,63 @@ static void update(Config* config, const u8* buffer, s32 size)
     tic_cart_load(config->cart, buffer, size);
 
     readConfig(config);
-    studioConfigChanged(config->studio);
+    config->changed(config->host);
 }
 
 static void setDefault(Config* config)
 {
-    config->data = (StudioConfig)
-    {
+    config->data = (StudioConfig){
         .cart = config->cart,
         .uiScale = 4,
         .options =
-        {
+            {
 #if defined(CRT_SHADER_SUPPORT)
-            .crt            = false,
+                // Off unless a player turns it on: it costs a fragment shader per
+                // output pixel, and not every machine holds the frame rate.
+                .crt = false,
 #endif
-            .volume         = MAX_VOLUME,
-            .vsync          = DEFAULT_VSYNC,
-            .fullscreen     = false,
-            .integerScale   = INTEGER_SCALE_DEFAULT,
-            .autosave       = false,
+                .volume = MAX_VOLUME,
+                .vsync = DEFAULT_VSYNC,
+                .fullscreen = false,
+                .integerScale = INTEGER_SCALE_DEFAULT,
+#if defined(BUILD_RENDER_CACHE)
+                .drawCache = true,
+#endif
+#if defined(BUILD_SURF)
+                .autosave = false,
+#endif
 #if defined(BUILD_EDITORS)
-            .keybindMode    = KEYBIND_STANDARD,
-            .tabMode        = TAB_AUTO,
-            .tabSize        = 1,
+                .keybindMode = KEYBIND_STANDARD,
+                .tabMode = TAB_AUTO,
+                .tabSize = 1,
+                .musicTracker = false,
+                .codeShadow = true,
+                .codeStatusbar = true,
 #endif
-        },
+            },
     };
 
     tic_sys_default_mapping(&config->data.options.mapping);
 
     {
         static const u8 ConfigZip[] =
-        {
-            #include "../build/assets/config.tic.dat"
-        };
+            {
+#include "../build/assets/config.tic.dat"
 
-        u8* data = malloc(sizeof(tic_cartridge));
+            };
+
+        u8* data = malloc(TIC_CART_SAVE_SIZE);
 
         SCOPE(free(data))
         {
-            update(config, data, tic_tool_unzip(data, sizeof(tic_cartridge), ConfigZip, sizeof ConfigZip));
+            update(config, data, tic_tool_unzip(data, TIC_CART_SAVE_SIZE, ConfigZip, sizeof ConfigZip));
         }
     }
 }
 
 static void saveConfig(Config* config, bool overwrite)
 {
-    u8* buffer = malloc(sizeof(tic_cartridge));
+    u8* buffer = malloc(TIC_CART_SAVE_SIZE);
 
     if(buffer)
     {
@@ -146,10 +158,14 @@ static void saveConfigCart(Config* config)
     readConfig(config);
     saveConfig(config, true);
 
-    studioConfigChanged(config->studio);
+    config->changed(config->host);
 }
 
-static const char OptionsJsonPath[] = TIC_LOCAL "options.json";
+// The options live next to the config of this build, not in the shared
+// .local: the path used to carry no version, so every TIC-80 build in the
+// same storage — the web player on itch, where all games share one origin —
+// read and overwrote the same options.json, keys and all.
+static const char OptionsJsonPath[] = TIC_LOCAL_VERSION "options.json";
 
 typedef struct
 {
@@ -162,34 +178,102 @@ static void loadOptions(Config* config)
     u8* data = (u8*)tic_fs_loadroot(config->fs, OptionsJsonPath, &size);
 
     if(data) SCOPE(free(data))
-    {
-        string json;
-        snprintf(json.data, sizeof json, "%.*s", size, data);
-
-        if(json_parse(json.data, strlen(json.data)))
         {
-            struct StudioOptions* options = &config->data.options;
+            string json;
+            snprintf(json.data, sizeof json, "%.*s", size, data);
 
+            if(json_parse(json.data, (s32)(strlen(json.data))))
+            {
+                struct StudioOptions* options = &config->data.options;
+
+            // Every key this file does not carry keeps the value the player
+            // already has — the one from the config above, or the default.
+            // A reader answers zero/false when the key is not there, so each
+            // key is asked for first: reading a missing "volume" as 0 turned a
+            // file without it into a muted player, and leaving the options
+            // screen saved that zero back, so the silence was permanent. The
+            // second argument of a reader is the token its scan starts at, not
+            // a value to fall back to — passing the current volume there
+            // walked the scan past its own key and read the zero anyway.
 #if defined(CRT_SHADER_SUPPORT)
-            options->crt = json_bool("crt", 0);
+                if(json_has("crt", 0))
+                    options->crt = json_bool("crt", 0);
 #endif
-            options->fullscreen = json_bool("fullscreen", 0);
-            options->vsync = json_bool("vsync", 0);
-            options->integerScale = json_bool("integerScale", 0);
-            options->volume = json_int("volume", 0);
-            options->autosave = json_bool("autosave", 0);
+                if(json_has("fullscreen", 0))
+                    options->fullscreen = json_bool("fullscreen", 0);
 
-            string mapping;
-            json_string("mapping", 0, mapping.data, sizeof mapping);
-            tic_tool_str2buf(mapping.data, strlen(mapping.data), &options->mapping, false);
+                if(json_has("vsync", 0))
+                    options->vsync = json_bool("vsync", 0);
+
+                if(json_has("integerScale", 0))
+                    options->integerScale = json_bool("integerScale", 0);
+
+#if defined(BUILD_RENDER_CACHE)
+                if(json_has("drawCache", 0))
+                    options->drawCache = json_bool("drawCache", 0);
+#endif
+
+                if(json_has("volume", 0))
+                    options->volume = json_int("volume", 0);
+
+#if defined(BUILD_SURF)
+                if(json_has("autosave", 0))
+                    options->autosave = json_bool("autosave", 0);
+#endif
+
+                // Two bounds matter here: a file without "mapping" used to read
+                // the whole document (a missing key resolves to token 0, the root
+                // object), and the decoder writes one byte per two characters of
+                // its input without knowing how big the option is — so the length
+                // is capped at what the mapping can hold.
+                string mapping;
+                if(json_has("mapping", 0))
+                {
+                    json_string("mapping", 0, mapping.data, sizeof mapping);
+                    tic_tool_str2buf(mapping.data,
+                                     MIN((s32)strlen(mapping.data), (s32)sizeof options->mapping * 2),
+                                     &options->mapping, false);
+                }
 
 #if defined(BUILD_EDITORS)
-            options->keybindMode = json_int("keybindMode", 0);
-            options->tabMode = json_int("tabMode", 0);
-            options->tabSize = json_int("tabSize", 0);
+                if(json_has("keybindMode", 0))
+                    options->keybindMode = json_int("keybindMode", 0);
+
+                if(json_has("tabMode", 0))
+                    options->tabMode = json_int("tabMode", 0);
+
+                if(json_has("tabSize", 0))
+                    options->tabSize = json_int("tabSize", 0);
+
+                if(json_has("musicTracker", 0))
+                    options->musicTracker = json_bool("musicTracker", 0);
+
+                if(json_has("codeAltFont", 0))
+                    options->codeAltFont = json_bool("codeAltFont", 0);
+
+                if(json_has("codeShadow", 0))
+                    options->codeShadow = json_bool("codeShadow", 0);
+
+                if(json_has("codeLineNumbers", 0))
+                    options->codeLineNumbers = json_bool("codeLineNumbers", 0);
+
+                if(json_has("codeSidebar", 0))
+                    options->codeSidebar = json_bool("codeSidebar", 0);
+
+                if(json_has("codeStatusbar", 0))
+                    options->codeStatusbar = json_bool("codeStatusbar", 0);
+
+                if(json_has("codeMinimap", 0))
+                    options->codeMinimap = json_bool("codeMinimap", 0);
+
+                if(json_has("autohide", 0))
+                    options->autohide = json_bool("autohide", 0);
+
+                if(json_has("compactBar", 0))
+                    options->compactBar = json_bool("compactBar", 0);
 #endif
+            }
         }
-    }
 }
 
 static string data2str(const void* data, s32 size)
@@ -208,53 +292,81 @@ static void saveOptions(Config* config)
 {
     const struct StudioOptions* options = &config->data.options;
 
-    string buf;
-    sprintf(buf.data,
-        "{ "
+    // the mapping alone can fill a string, and the JSON wraps it in more
+    char buf[sizeof(string) * 2];
+    sprintf(buf,
+            "{ "
 #if defined(CRT_SHADER_SUPPORT)
             "\"crt\":%s, "
 #endif
             "\"fullscreen\":%s, "
             "\"vsync\":%s, "
             "\"integerScale\":%s, "
+#if defined(BUILD_RENDER_CACHE)
+            "\"drawCache\":%s, "
+#endif
             "\"volume\":%i, "
+#if defined(BUILD_SURF)
             "\"autosave\":%s, "
+#endif
             "\"mapping\":\"%s\""
 #if defined(BUILD_EDITORS)
             ", "
             "\"keybindMode\":%i, "
             "\"tabMode\":%i, "
-            "\"tabSize\":%i"
+            "\"tabSize\":%i, "
+            "\"musicTracker\":%s, "
+            "\"codeAltFont\":%s, "
+            "\"codeShadow\":%s, "
+            "\"codeLineNumbers\":%s, "
+            "\"codeSidebar\":%s, "
+            "\"codeStatusbar\":%s, "
+            "\"codeMinimap\":%s, "
+            "\"autohide\":%s, "
+            "\"compactBar\":%s"
 #endif
-        " }"
-        ,
+            " }",
 #if defined(CRT_SHADER_SUPPORT)
-        bool2str(options->crt),
+            bool2str(options->crt),
 #endif
-        bool2str(options->fullscreen),
-        bool2str(options->vsync),
-        bool2str(options->integerScale),
-        options->volume,
-        bool2str(options->autosave),
-        data2str(&options->mapping, sizeof options->mapping).data
+            bool2str(options->fullscreen),
+            bool2str(options->vsync),
+            bool2str(options->integerScale),
+#if defined(BUILD_RENDER_CACHE)
+            bool2str(options->drawCache),
+#endif
+            options->volume,
+#if defined(BUILD_SURF)
+            bool2str(options->autosave),
+#endif
+            data2str(&options->mapping, sizeof options->mapping).data
 
 #if defined(BUILD_EDITORS)
-        ,
-        options->keybindMode,
-        options->tabMode,
-        options->tabSize
+            ,
+            options->keybindMode,
+            options->tabMode,
+            options->tabSize,
+            bool2str(options->musicTracker),
+            bool2str(options->codeAltFont),
+            bool2str(options->codeShadow),
+            bool2str(options->codeLineNumbers),
+            bool2str(options->codeSidebar),
+            bool2str(options->codeStatusbar),
+            bool2str(options->codeMinimap),
+            bool2str(options->autohide),
+            bool2str(options->compactBar)
 #endif
-        );
+    );
 
-    tic_fs_saveroot(config->fs, OptionsJsonPath, buf.data, strlen(buf.data), true);
+    tic_fs_saveroot(config->fs, OptionsJsonPath, buf, (s32)(strlen(buf)), true);
 }
 
-void initConfig(Config* config, Studio* studio, tic_fs* fs)
+void initConfig(Config* config, tic_mem* tic, struct tic_fs* fs, ConfigChanged changed, void* host)
 {
-    *config = (Config)
-    {
-        .studio = studio,
-        .tic = getMemory(studio),
+    *config = (Config){
+        .host = host,
+        .changed = changed,
+        .tic = tic,
         .cart = realloc(config->cart, sizeof(tic_cartridge)),
         .saveConfigCart = saveConfigCart,
         .saveOptions = saveOptions,
@@ -275,7 +387,8 @@ void initConfig(Config* config, Studio* studio, tic_fs* fs)
 
             free(data);
         }
-        else saveConfig(config, false);
+        else
+            saveConfig(config, false);
     }
 
     loadOptions(config);

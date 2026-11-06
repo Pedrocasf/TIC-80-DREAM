@@ -60,7 +60,7 @@
 	shallow = true
 [submodule "vendor/quickjs"]
 	path = vendor/quickjs
-	url = https://github.com/nesbox/quickjs.git
+	url = https://github.com/quickjs-ng/quickjs.git
 	shallow = true
 [submodule "vendor/naett"]
 	path = vendor/naett
@@ -89,3 +89,22 @@
 [submodule "vendor/lpeg"]
 	path = vendor/lpeg
 	url = https://github.com/roberto-ieru/LPeg.git
+[submodule "vendor/miniscript2"]
+	path = vendor/miniscript2
+	url = https://github.com/JoeStrout/miniscript2
+[submodule "vendor/sokol"]
+	path = vendor/sokol
+	url = https://github.com/floooh/sokol.git
+	shallow = true
+[submodule "vendor/clay"]
+	path = vendor/clay
+	url = https://github.com/nicbarker/clay.git
+	shallow = true
+[submodule "vendor/gravity"]
+	path = vendor/gravity
+	url = https://github.com/marcobambini/gravity.git
+[submodule "vendor/lugforth"]
+	path = vendor/lugforth
+	url = https://github.com/luginf/lugforth.git
+	branch = tic80
+	shallow = true

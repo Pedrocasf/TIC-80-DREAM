@@ -10,6 +10,9 @@ set(TIC_RT_WREN "unknown")
 set(TIC_RT_WASM "unknown")
 set(TIC_RT_JANET "unknown")
 set(TIC_RT_PYTHON "unknown")
+set(TIC_RT_MINISCRIPT "unknown")
+set(TIC_RT_FORTH "unknown")
+set(TIC_RT_GRAVITY "unknown")
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/lua/lua.h")
     file(STRINGS "${CMAKE_SOURCE_DIR}/vendor/lua/lua.h" LUA_VERSION_MAJOR_LINE REGEX "^#define LUA_VERSION_MAJOR[ \t]+\"[^\"]+\"")
@@ -40,10 +43,20 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/mruby/include/mruby/version.h")
     endif()
 endif()
 
-if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/quickjs/VERSION")
-    file(STRINGS "${CMAKE_SOURCE_DIR}/vendor/quickjs/VERSION" QUICKJS_VERSION_LINE LIMIT_COUNT 1)
-    if(QUICKJS_VERSION_LINE)
-        set(TIC_RT_JS "QuickJS ${QUICKJS_VERSION_LINE}")
+# The language build selects the bundled or system header before this runs.
+if(NOT QUICKJS_DIR)
+    set(QUICKJS_DIR "${CMAKE_SOURCE_DIR}/vendor/quickjs")
+endif()
+if(EXISTS "${QUICKJS_DIR}/quickjs.h")
+    file(STRINGS "${QUICKJS_DIR}/quickjs.h" QUICKJS_VERSION_LINES REGEX "^#define QJS_VERSION_")
+    foreach(part MAJOR MINOR PATCH)
+        string(REGEX MATCH "QJS_VERSION_${part}[ \t]+([0-9]+)" QUICKJS_VERSION_MATCH "${QUICKJS_VERSION_LINES}")
+        set(QUICKJS_VERSION_${part} "${CMAKE_MATCH_1}")
+    endforeach()
+    if(NOT "${QUICKJS_VERSION_MAJOR}" STREQUAL "" AND
+       NOT "${QUICKJS_VERSION_MINOR}" STREQUAL "" AND
+       NOT "${QUICKJS_VERSION_PATCH}" STREQUAL "")
+        set(TIC_RT_JS "QuickJS-ng ${QUICKJS_VERSION_MAJOR}.${QUICKJS_VERSION_MINOR}.${QUICKJS_VERSION_PATCH}")
     endif()
 endif()
 
@@ -121,6 +134,31 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/pocketpy/include/pocketpy/config.h")
     if(PYTHON_VERSION_LINE)
         string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" PYTHON_VERSION "${PYTHON_VERSION_LINE}")
         set(TIC_RT_PYTHON "pocketpy ${PYTHON_VERSION}")
+    endif()
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/miniscript2/generated/CoreIntrinsics.g.cpp")
+    # MiniScript keeps its own version in the map its `version` intrinsic
+    # returns; hostVersion beside it belongs to whatever application embeds
+    # the runtime, so it is not this one.
+    file(STRINGS "${CMAKE_SOURCE_DIR}/vendor/miniscript2/generated/CoreIntrinsics.g.cpp" MINISCRIPT_VERSION_LINE REGEX "MapSet\\(\"miniscript\", \"[^\"]+\"\\)")
+    if(MINISCRIPT_VERSION_LINE)
+        string(REGEX REPLACE ".*MapSet\\(\"miniscript\", \"([^\"]+)\"\\).*" "\\1" MINISCRIPT_VERSION "${MINISCRIPT_VERSION_LINE}")
+        set(TIC_RT_MINISCRIPT "MiniScript ${MINISCRIPT_VERSION}")
+    endif()
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/lugforth/VERSION")
+    file(STRINGS "${CMAKE_SOURCE_DIR}/vendor/lugforth/VERSION" LUGFORTH_VERSION LIMIT_COUNT 1)
+    set(TIC_RT_FORTH "Lugforth ${LUGFORTH_VERSION}")
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/gravity/src/shared/gravity_value.h")
+    file(STRINGS "${CMAKE_SOURCE_DIR}/vendor/gravity/src/shared/gravity_value.h" GRAVITY_VERSION_LINE REGEX "^#define GRAVITY_VERSION[^\"]*\"[^\"]+\"")
+
+    if(GRAVITY_VERSION_LINE)
+        string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" GRAVITY_VERSION "${GRAVITY_VERSION_LINE}")
+        set(TIC_RT_GRAVITY "Gravity ${GRAVITY_VERSION}")
     endif()
 endif()
 

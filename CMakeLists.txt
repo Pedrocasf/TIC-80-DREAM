@@ -1,17 +1,17 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 
 include(cmake/version.cmake)
 
 project(TIC-80 VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_REVISION} LANGUAGES C CXX)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-set(CMAKE_C_FLAGS_RELEASE "-O2 -flto -ffat-lto-objects ${CMAKE_C_FLAGS_RELEASE}")
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -flto -ffat-lto-objects ${CMAKE_CXX_FLAGS_RELEASE}")
+set(CMAKE_C_FLAGS_RELEASE "-flto -ffat-lto-objects ${CMAKE_C_FLAGS_RELEASE}")
+set(CMAKE_CXX_FLAGS_RELEASE "-flto -ffat-lto-objects ${CMAKE_CXX_FLAGS_RELEASE}")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"  OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-set(CMAKE_C_FLAGS_RELEASE "-O2 -flto ${CMAKE_C_FLAGS_RELEASE}")
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -flto ${CMAKE_CXX_FLAGS_RELEASE}")
+set(CMAKE_C_FLAGS_RELEASE "-flto ${CMAKE_C_FLAGS_RELEASE}")
+set(CMAKE_CXX_FLAGS_RELEASE "-flto ${CMAKE_CXX_FLAGS_RELEASE}")
 endif()
 
 if(APPLE)
@@ -23,7 +23,6 @@ message("PROJECT_VERSION: ${PROJECT_VERSION}${VERSION_STATUS}")
 message("VERSION_HASH: ${VERSION_HASH}")
 
 configure_file("${PROJECT_SOURCE_DIR}/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/version.h")
-include(cmake/runtime_versions.cmake)
 
 if(ANDROID OR EMSCRIPTEN OR NINTENDO_3DS OR NINTENDO_SWITCH OR BAREMETALPI OR VITA)
     set(BUILD_STATIC_DEFAULT ON)
@@ -42,11 +41,40 @@ set(BUILD_WITH_ALL_DEFAULT OFF)
 
 option(BUILD_STATIC "Static runtime" ${BUILD_STATIC_DEFAULT})
 option(BUILD_WITH_ALL "Build all supported scripts" ${BUILD_WITH_ALL_DEFAULT})
-option(BUILD_SDL "SDL Enabled" ON)
+option(BUILD_APPLE "Apple Native Backend Enabled" OFF)
+option(BUILD_RENDER_CACHE "Build with render cache optimization" OFF)
+if(BUILD_RENDER_CACHE)
+    add_definitions(-DBUILD_RENDER_CACHE)
+endif()
+# Sokol is the layer the desktop ships and the web has built since the browser
+# change; the platforms below cannot build it and keep the SDL default.
+if(ANDROID OR NINTENDO_3DS OR NINTENDO_SWITCH OR BAREMETALPI OR RPI OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(BUILD_SDL_DEFAULT ON)
+    set(BUILD_SOKOL_DEFAULT OFF)
+else()
+    set(BUILD_SDL_DEFAULT OFF)
+    set(BUILD_SOKOL_DEFAULT ON)
+endif()
+
+option(BUILD_SDL "SDL Enabled" ${BUILD_SDL_DEFAULT})
+option(BUILD_SOKOL "Sokol Enabled" ${BUILD_SOKOL_DEFAULT})
+option(BUILD_SOKOL_WGPU "Sokol WebGPU backend (browser builds)" OFF)
+if(BUILD_APPLE)
+    set(BUILD_SDL OFF)
+    set(BUILD_SOKOL OFF)
+endif()
+if(BUILD_SDL AND BUILD_SOKOL)
+    message(FATAL_ERROR "BUILD_SDL and BUILD_SOKOL are two system layers: enable exactly one")
+endif()
+# WebGPU is the Emscripten sokol backend; elsewhere it would be silently ignored.
+if(BUILD_SOKOL_WGPU AND NOT (EMSCRIPTEN AND BUILD_SOKOL))
+    message(FATAL_ERROR "BUILD_SOKOL_WGPU is the Emscripten sokol backend: enable it with BUILD_SOKOL, for the browser")
+endif()
 option(BUILD_SDLGPU "SDL GPU Enabled" OFF)
 option(BUILD_LIBRETRO "libretro Enabled" ${BUILD_LIBRETRO_DEFAULT})
 option(BUILD_TOOLS "bin2txt prj2cart" OFF)
 option(BUILD_EDITORS "Build cart editors" ON)
+option(BUILD_SURF "Build the SURF game browser" ON)
 option(BUILD_PRO "Build PRO version" FALSE)
 option(BUILD_PLAYER "Build standalone players" ${BUILD_PLAYER_DEFAULT})
 option(BUILD_TOUCH_INPUT "Build with touch input support" ${BUILD_TOUCH_INPUT_DEFAULT})
@@ -56,9 +84,8 @@ option(BUILD_WITH_ZLIB "Build with zlib linked" ON)
 option(TIC80_TARGET "Target binary suffix")
 option(PREFER_SYSTEM_LIBRARIES "Prefer link with system libraries" OFF)
 
-if(BUILD_EDITORS)
-    set(BUILD_SURF ON)
-endif()
+# The browser is part of the default build; the builds that should not carry
+# one — the export stubs, the GLES2 player — pass -DBUILD_SURF=OFF.
 
 if(NOT TIC80_TARGET)
     set(TIC80_TARGET tic80)
@@ -76,9 +103,16 @@ endif()
 
 if(NINTENDO_SWITCH AND NOT LIBRETRO_STATIC)
     set(PREFER_SYSTEM_LIBRARIES ON)
+    if(NOT TIC_DATA_PATH)
+        set(TIC_DATA_PATH "/switch/tic80")
+    endif()
 endif()
 
 add_library(runtime INTERFACE)
+
+if(TIC_DATA_PATH)
+    target_compile_definitions(runtime INTERFACE TIC_DATA_PATH="${TIC_DATA_PATH}")
+endif()
 
 if(BUILD_STATIC)
     set(TIC_RUNTIME STATIC)
@@ -92,6 +126,7 @@ target_compile_definitions(runtime INTERFACE BUILD_DEPRECATED)
 message("PREFER_SYSTEM_LIBRARIES: ${PREFER_SYSTEM_LIBRARIES}")
 message("BUILD_STATIC: ${BUILD_STATIC}")
 message("BUILD_SDLGPU: ${BUILD_SDLGPU}")
+message("BUILD_SOKOL_WGPU: ${BUILD_SOKOL_WGPU}")
 message("BUILD_TOUCH_INPUT: ${BUILD_TOUCH_INPUT}")
 message("BUILD_WITH_ALL: ${BUILD_WITH_ALL}")
 
@@ -110,6 +145,10 @@ if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN AND NOT ANDROID)
         set(FREEBSD TRUE)
     endif()
 endif()
+
+option(PREFER_SYSTEM_SDL2 "Prefer system SDL2" ${PREFER_SYSTEM_LIBRARIES})
+option(USE_GLES2 "Use GLES2" OFF)
+option(USE_EGL "Use EGL" OFF)
 
 if (BUILD_NO_OPTIMIZATION)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
@@ -142,17 +181,10 @@ if(MSVC)
         set( CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/lib )
         set( CMAKE_LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/lib )
         set( CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/bin )
-
-        # use static runtime
-        # !TODO: use set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>") from cmake 3.15 instead
-        if(CMAKE_C_FLAGS_${OUTPUTCONFIG} MATCHES "/MD")
-            string(REGEX REPLACE "/MD" "/MT" CMAKE_C_FLAGS_${OUTPUTCONFIG} "${CMAKE_C_FLAGS_${OUTPUTCONFIG}}")
-        endif()
-
-        if(CMAKE_CXX_FLAGS_${OUTPUTCONFIG} MATCHES "/MD")
-            string(REGEX REPLACE "/MD" "/MT" CMAKE_CXX_FLAGS_${OUTPUTCONFIG} "${CMAKE_CXX_FLAGS_${OUTPUTCONFIG}}")
-        endif()
     endforeach()
+
+    # Static runtime for every config; CMP0091 is NEW from the 3.15 minimum.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 else()
 
@@ -166,12 +198,12 @@ endif()
 set(THIRDPARTY_DIR ${CMAKE_SOURCE_DIR}/vendor)
 set(DEMO_CARTS_IN ${CMAKE_SOURCE_DIR}/demos)
 
+include(cmake/warnings.cmake)
 include(cmake/gif.cmake)
 include(cmake/blipbuf.cmake)
 include(cmake/zlib.cmake)
 include(cmake/zip.cmake)
 include(cmake/png.cmake)
-include(cmake/tools.cmake)
 
 include(cmake/lua.cmake)
 include(cmake/moon.cmake)
@@ -185,6 +217,14 @@ include(cmake/squirrel.cmake)
 include(cmake/pocketpy.cmake)
 include(cmake/quickjs.cmake)
 include(cmake/janet.cmake)
+include(cmake/gravity.cmake)
+include(cmake/forth.cmake)
+include(cmake/miniscript.cmake)
+
+include(cmake/runtime_versions.cmake)
+
+# After the languages: the tools check what those options came out as.
+include(cmake/tools.cmake)
 
 include(cmake/core.cmake)
 include(cmake/wave.cmake)
@@ -192,10 +232,35 @@ include(cmake/argparse.cmake)
 include(cmake/naett.cmake)
 include(cmake/studio.cmake)
 
+# After the core and the languages: the tests link what those came out as.
+include(cmake/tests.cmake)
+
 include(cmake/sdl.cmake)
+include(cmake/sokol.cmake)
+include(cmake/apple.cmake)
 include(cmake/libretro.cmake)
 include(cmake/n3ds.cmake)
 include(cmake/nswitch.cmake)
 include(cmake/vita.cmake)
+
+# The Linux desktop entry, its icon and the mime type belong to the app, not
+# to the layer; a build with no layer at all has no binary to install.
+if(LINUX AND TARGET ${TIC80_TARGET})
+
+    configure_file("${PROJECT_SOURCE_DIR}/build/linux/tic80.desktop.in" "${PROJECT_SOURCE_DIR}/build/linux/tic80.desktop")
+
+    install(TARGETS ${TIC80_TARGET} DESTINATION bin)
+
+    set(TIC80_DESKTOP_DIR       "share/applications/")
+    set(TIC80_MIME_DIR          "share/mime/packages/")
+    set(TIC80_PIXMAPS_DIR       "share/icons/hicolor/256x256/apps")
+    set(TIC80_MIMETYPE_ICON_DIR "share/icons/hicolor/256x256/mimetypes")
+
+    install(FILES ${PROJECT_SOURCE_DIR}/build/linux/tic80.desktop DESTINATION ${TIC80_DESKTOP_DIR})
+    install(FILES ${PROJECT_SOURCE_DIR}/build/linux/tic80.xml DESTINATION ${TIC80_MIME_DIR})
+    install(FILES ${PROJECT_SOURCE_DIR}/build/linux/tic80.png DESTINATION ${TIC80_PIXMAPS_DIR})
+    install(FILES ${PROJECT_SOURCE_DIR}/build/linux/tic80.png DESTINATION ${TIC80_MIMETYPE_ICON_DIR} RENAME application-x-tic80-item.png)
+
+endif()
 
 include(cmake/install.cmake)

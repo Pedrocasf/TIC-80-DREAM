@@ -101,6 +101,14 @@ Copyright (c) 1994–2025 Lua.org, PUC-Rio
 
 The MIT license text is included in `LICENSES/MIT.txt`.
 
+## Lugforth
+Project: https://github.com/luginf/lugforth  
+License: Apache-2.0  
+Copyright (c) 2023 Bradley D. Nelson (uEforth)  
+Copyright (c) 2026 Luginfo10 (Lugforth modifications)  
+
+The Apache-2.0 license text is included in `LICENSES/Apache-2.0.txt`.
+
 ## MoonScript
 Project: https://github.com/nesbox/moonscript  
 License: MIT  
@@ -129,11 +137,13 @@ Copyright (c) 2026 blueloveTH
 
 The MIT license text is included in `LICENSES/MIT.txt`.
 
-## QuickJS
-Project: https://github.com/nesbox/quickjs  
-License: MIT  
-Copyright (c) 2017-2021 Fabrice Bellard  
-Copyright (c) 2017-2021 Charlie Gordon  
+## QuickJS-ng
+Project: https://github.com/quickjs-ng/quickjs
+License: MIT
+Copyright (c) 2017-2026 Fabrice Bellard
+Copyright (c) 2017-2024 Charlie Gordon
+Copyright (c) 2023-2026 Ben Noordhuis
+Copyright (c) 2023-2026 Saúl Ibarra Corretgé
 
 The MIT license text is included in `LICENSES/MIT.txt`.
 
@@ -165,6 +175,13 @@ Copyright (c) 2003-2022 Alberto Demichelis
 
 The MIT license text is included in `LICENSES/MIT.txt`.
 
+## WABT (wasm2c runtime)
+Project: https://github.com/WebAssembly/wabt  
+License: Apache-2.0  
+Copyright (c) 2018 WebAssembly Community Group participants  
+
+The Apache-2.0 license text is included in `LICENSES/Apache-2.0.txt`.
+
 ## Wasm3
 Project: https://github.com/wasm3/wasm3  
 License: MIT  
@@ -182,7 +199,7 @@ The MIT license text is included in `LICENSES/MIT.txt`.
 ## YueScript
 Project: https://github.com/IppClub/YueScript  
 License: MIT  
-Copyright (c) 2017-2025 Li Jin dragon-fly@qq.com  
+Copyright (c) 2017-2026 Li Jin dragon-fly@qq.com  
 
 The MIT license text is included in `LICENSES/MIT.txt`.
 
