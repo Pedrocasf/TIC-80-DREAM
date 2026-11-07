@@ -786,7 +786,7 @@ typedef struct
     tic_fs* fs;
     fs_load_callback done;
     void* data;
-    char* cachePath;
+    char cachePath[TICNAME_MAX];
     char hash[HashSize];
 } LoadFileByHashData;
 
@@ -837,7 +837,6 @@ static void fileByHashLoaded(const net_get_data* netData)
         case net_get_done:
         case net_get_error:
 
-            free(loadFileByHashData->cachePath);
             free(loadFileByHashData);
             break;
         default: break;
@@ -870,8 +869,9 @@ void tic_fs_hashload(tic_fs* fs, const char* name, const char* hash, fs_load_cal
     char path[TICNAME_MAX];
     snprintf(path, sizeof path, "/cart/%s/%s", hash, name);
 
-    LoadFileByHashData loadFileByHashData = {fs, callback, data, strdup(cachePath), ""};
-    strncpy(loadFileByHashData.hash, hash, sizeof loadFileByHashData.hash - 1);
+    LoadFileByHashData loadFileByHashData = {fs, callback, data, "", ""};
+    snprintf(loadFileByHashData.cachePath, sizeof loadFileByHashData.cachePath, "%s", cachePath);
+    snprintf(loadFileByHashData.hash, sizeof loadFileByHashData.hash, "%s", hash);
 
     tic_net_get(fs->net, path, fileByHashLoaded, MOVE(loadFileByHashData));
 #else

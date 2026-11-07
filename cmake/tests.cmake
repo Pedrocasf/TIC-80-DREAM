@@ -216,6 +216,8 @@ if(BUILD_TESTS)
         ${CMAKE_SOURCE_DIR}/src/studio/config.c
         ${CMAKE_SOURCE_DIR}/src/studio/rom.c
         ${CMAKE_SOURCE_DIR}/src/ext/json.c
+        # fs.c holds a downloaded cart to the md5 it is named by
+        ${CMAKE_SOURCE_DIR}/src/ext/md5.c
     )
 
     target_include_directories(studio-services-test PRIVATE ${CMAKE_BINARY_DIR} ${THIRDPARTY_DIR}/jsmn)
