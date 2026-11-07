@@ -13,7 +13,7 @@ SDL2 is built from `vendor/sdl2`, no extra vdpm package is needed.
 
 ```
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake \
-  -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_ALL=ON \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_ALL=ON -DBUILD_TOUCH_INPUT=ON \
   -DBUILD_WITH_JS=OFF -DBUILD_WITH_SCHEME=OFF -DBUILD_WITH_RUBY=OFF -DBUILD_WITH_YUE=OFF
 cmake --build build --parallel
 ```

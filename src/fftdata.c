@@ -14,6 +14,9 @@ float fftSmoothingData[FFT_SIZE] = {0};
 float fftNormalizedData[FFT_SIZE] = {0};
 float fftNormalizedMaxData[FFT_SIZE] = {0};
 
+float fftRawData[FFT_SIZE] = {0};
+float fftRawSmoothingData[FFT_SIZE] = {0};
+
 bool fftEnabled = false;
 
 #define FFT_DEBUG
@@ -23,9 +26,9 @@ FFT_LogLevel g_currentLogLevel = FFT_LOG_DEBUG;
 void FFT_DebugLog(FFT_LogLevel level, const char* format, ...)
 {
 #ifdef FFT_DEBUG
-    if (level <= g_currentLogLevel)
+    if(level <= g_currentLogLevel)
     {
-        if (level == FFT_LOG_TRACE)
+        if(level == FFT_LOG_TRACE)
         {
             time_t now = time(NULL);
             struct tm* tm_now = localtime(&now);
@@ -36,7 +39,7 @@ void FFT_DebugLog(FFT_LogLevel level, const char* format, ...)
         }
         va_list args;
         va_start(args, format);
-        switch (level)
+        switch(level)
         {
             case FFT_LOG_TRACE:
                 printf("[FFT TRACE]: ");
@@ -57,6 +60,7 @@ void FFT_DebugLog(FFT_LogLevel level, const char* format, ...)
                 printf("[FFT FATAL]: ");
                 break;
             case FFT_LOG_OFF:
+                va_end(args);
                 return;
         }
         vprintf(format, args);

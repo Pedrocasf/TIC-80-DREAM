@@ -30,6 +30,9 @@
 // symlink entry, extracting one just fails.
 int symlink(const char* name1, const char* name2)
 {
+    (void)name1;
+    (void)name2;
+
     errno = ENOSYS;
     return -1;
 }

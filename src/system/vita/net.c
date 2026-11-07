@@ -35,11 +35,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define URL_SIZE 2048
-#define NET_POOL_SIZE (512 * 1024)
+#define URL_SIZE       2048
+#define NET_POOL_SIZE  (512 * 1024)
 #define HTTP_POOL_SIZE (512 * 1024)
 #define READ_PAGE_SIZE (16 * 1024)
-#define TIMEOUT_USEC (10 * 1000 * 1000)
+#define TIMEOUT_USEC   (10 * 1000 * 1000)
 
 #define USER_AGENT "tic80-vita/" DEF2STR(TIC_VERSION_MAJOR) "." DEF2STR(TIC_VERSION_MINOR)
 
@@ -228,8 +228,7 @@ tic_net* tic_net_create(const char* host)
 
     tic_net* net = NEW(tic_net);
 
-    *net = (tic_net)
-    {
+    *net = (tic_net){
         .tick = SDL_CreateMutex(),
         .host = host,
         .tmpl = tmpl,
@@ -268,8 +267,7 @@ void tic_net_get(tic_net* net, const char* url, net_get_callback callback, void*
 
     net_ctx* ctx = NEW(net_ctx);
 
-    *ctx = (net_ctx)
-    {
+    *ctx = (net_ctx){
         .net = net,
         .callback = callback,
         .data = data,

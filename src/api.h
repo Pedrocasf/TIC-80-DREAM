@@ -26,14 +26,19 @@
 #include "tic.h"
 #include "time.h"
 
-typedef struct { u8 index; tic_flip flip; tic_rotate rotate; } RemapResult;
-typedef void(*RemapFunc)(void*, s32 x, s32 y, RemapResult* result);
+typedef struct
+{
+    u8 index;
+    tic_flip flip;
+    tic_rotate rotate;
+} RemapResult;
+typedef void (*RemapFunc)(void*, s32 x, s32 y, RemapResult* result);
 
-typedef void(*TraceOutput)(void*, const char*, u8 color);
-typedef void(*ErrorOutput)(void*, const char*);
-typedef void(*ExitCallback)(void*);
-typedef u64(*CounterCallback)(void*);
-typedef u64(*FreqCallback)(void*);
+typedef void (*TraceOutput)(void*, const char*, u8 color);
+typedef void (*ErrorOutput)(void*, const char*);
+typedef void (*ExitCallback)(void*);
+typedef u64 (*CounterCallback)(void*);
+typedef u64 (*FreqCallback)(void*);
 
 typedef struct
 {
@@ -49,12 +54,12 @@ typedef struct
 } tic_tick_data;
 
 typedef struct tic_mem tic_mem;
-typedef void(*tic_tick)(tic_mem* memory);
-typedef void(*tic_boot)(tic_mem* memory);
-typedef void(*tic_scanline)(tic_mem* memory, s32 row, void* data);
-typedef void(*tic_border)(tic_mem* memory, s32 row, void* data);
-typedef void(*tic_gamemenu)(tic_mem* memory, s32 index, void* data);
-typedef bool(*tic_lang_isalnum)(char c);
+typedef void (*tic_tick)(tic_mem* memory);
+typedef void (*tic_boot)(tic_mem* memory);
+typedef void (*tic_scanline)(tic_mem* memory, s32 row, void* data);
+typedef void (*tic_border)(tic_mem* memory, s32 row, void* data);
+typedef void (*tic_gamemenu)(tic_mem* memory, s32 index, void* data);
+typedef bool (*tic_lang_isalnum)(char c);
 
 typedef struct
 {
@@ -64,9 +69,9 @@ typedef struct
 
 typedef struct
 {
-    tic_scanline    scanline;
-    tic_border      border;
-    tic_gamemenu    menu;
+    tic_scanline scanline;
+    tic_border border;
+    tic_gamemenu menu;
     void* data;
 } tic_blit_callback;
 
@@ -92,6 +97,7 @@ typedef struct
 //       | CART    | RAM           | INDEX
 //       |---------+---------------+------- - - -
 //       |         |               |
+// clang-format off
 #define TIC_SYNC_LIST(macro) \
     macro(tiles,    tiles,        0) \
     macro(sprites,  sprites,      1) \
@@ -101,6 +107,7 @@ typedef struct
     macro(palette,  vram.palette, 5) \
     macro(flags,    flags,        6) \
     macro(screen,   vram.screen,  7)
+// clang-format on
 
 enum
 {
@@ -116,6 +123,7 @@ enum
 #define BDR_FN  "BDR"
 #define MENU_FN "MENU"
 
+// clang-format off
 #define TIC_CALLBACK_LIST(macro)                                                                                    \
     macro(TIC, TIC_FN "()", "Main function. It's called at " DEF2STR(TIC80_FRAMERATE)                               \
         "fps (" DEF2STR(TIC80_FRAMERATE) " times every second).")                                                   \
@@ -125,6 +133,7 @@ enum
         "for example, to manipulate the palette.")                                                                  \
     macro(BDR, BDR_FN "(row)", "Allows you to execute code between the drawing of each fullscreen scanline, "       \
         "for example, to manipulate the palette.")
+// clang-format on
 
 // API DEFINITION TABLE
 //  macro
@@ -138,6 +147,7 @@ enum
 //      function parameters
 //  )
 
+// clang-format off
 #define TIC_API_LIST(macro)                                                                                             \
     macro(print,                                                                                                        \
         "print(text x=0 y=0 color=15 fixed=false scale=1 smallfont=false) -> width",                                    \
@@ -218,6 +228,31 @@ enum
         tic_mem*, s32 x, s32 y, s32 width, s32 height, u8 color)                                                        \
                                                                                                                         \
                                                                                                                         \
+    macro(rrect,                                                                                                        \
+        "rrect(x y w h color radius=-1 exponent=2)",                                                                       \
+                                                                                                                        \
+        "This function draws a filled rounded rectangle of the desired size, color, and radius "                        \
+        "at the specified position.\n"                                                                                  \
+        "If you only need to draw the the border or outline of a rounded rectangle (ie not filled) see `rrectb()`.",    \
+        7,                                                                                                              \
+        5,                                                                                                              \
+        0,                                                                                                              \
+        void,                                                                                                           \
+        tic_mem*, s32 x, s32 y, s32 width, s32 height, u8 color, s32 radius, float exponent)                            \
+                                                                                                                        \
+                                                                                                                        \
+    macro(rrectb,                                                                                                       \
+        "rrectb(x y w h color radius=-1 exponent=2)",                                                                      \
+                                                                                                                        \
+        "This function draws a one pixel thick rounded rectangle border at the position requested.\n"                   \
+        "If you need to fill the rounded rectangle with a color, see `rrect()` instead.",                               \
+        7,                                                                                                              \
+        5,                                                                                                              \
+        0,                                                                                                              \
+        void,                                                                                                           \
+        tic_mem*, s32 x, s32 y, s32 width, s32 height, u8 color, s32 radius, float exponent)                            \
+                                                                                                                        \
+                                                                                                                        \
     macro(spr,                                                                                                          \
         "spr(id x y colorkey=-1 scale=1 flip=0 rotate=0 w=1 h=1)",                                                      \
                                                                                                                         \
@@ -278,6 +313,18 @@ enum
         0,                                                                                                              \
         u32,                                                                                                            \
         tic_mem*, s32 id, s32 hold, s32 period)                                                                         \
+                                                                                                                        \
+                                                                                                                        \
+    macro(btnr,                                                                                                         \
+        "btnr(id) -> released",                                                                                         \
+                                                                                                                        \
+        "This function allows you to read the status of one of TIC's buttons.\n"                                        \
+        "It returns true only if the key has been released since the last frame.\n",                                    \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        u32,                                                                                                            \
+        tic_mem*, s32 id)                                                                                               \
                                                                                                                         \
                                                                                                                         \
     macro(sfx,                                                                                                          \
@@ -701,7 +748,7 @@ enum
         "Things drawn outside of this area will not be visible.\n"                                                      \
         "Calling clip() with no parameters will reset the drawing area to the entire screen.",                          \
         4,                                                                                                              \
-        4,                                                                                                              \
+        0,                                                                                                              \
         0,                                                                                                              \
         void,                                                                                                           \
         tic_mem*, s32 x, s32 y, s32 width, s32 height)                                                                  \
@@ -782,6 +829,17 @@ enum
         tic_mem*, tic_key key, s32 hold, s32 period)                                                                    \
                                                                                                                         \
                                                                                                                         \
+    macro(keyr,                                                                                                         \
+        "keyr(code=-1) -> released",                                                                                    \
+                                                                                                                        \
+        "This function returns true if the given key isn't pressed but was pressed in the previous frame.\n",           \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        0,                                                                                                              \
+        bool,                                                                                                           \
+        tic_mem*, tic_key key)                                                                                          \
+                                                                                                                        \
+                                                                                                                        \
     macro(fget,                                                                                                         \
         "fget(sprite_id flag) -> bool",                                                                                 \
                                                                                                                         \
@@ -832,7 +890,131 @@ enum
         1,                                                                                                              \
         0,                                                                                                              \
         double,                                                                                                         \
+        tic_mem*, s32 startFreq, s32 endFreq)                                                                           \
+                                                                                                                        \
+    macro(vqt,                                                                                                          \
+        "vqt(bin)",                                                                                                     \
+                                                                                                                        \
+        "Get Variable-Q Transform magnitude for a specific frequency bin.\n"                                            \
+        "VQT provides 120 bins (0-119) with logarithmic frequency spacing for musical analysis.\n"                      \
+        "Bin frequency is 19.445 * 2^(bin/12) Hz; bin 0 is D#0/Eb0.\n"                                                  \
+        "Returns a value roughly 0..1 based on the intensity at that frequency.",                                       \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                              \
+                                                                                                                        \
+    macro(vqts,                                                                                                         \
+        "vqts(bin)",                                                                                                    \
+                                                                                                                        \
+        "Get smoothed Variable-Q Transform magnitude for a specific frequency bin.\n"                                   \
+        "VQT provides 120 bins (0-119) with logarithmic frequency spacing for musical analysis.\n"                      \
+        "Bin frequency is 19.445 * 2^(bin/12) Hz; bin 0 is D#0/Eb0.\n"                                                  \
+        "Returns a smoothed value roughly 0..1 based on the intensity at that frequency.",                              \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                              \
+                                                                                                                        \
+    macro(vqtr,                                                                                                         \
+        "vqtr(bin)",                                                                                                    \
+                                                                                                                        \
+        "Get raw (non-normalized) Variable-Q Transform magnitude for a specific frequency bin.\n"                       \
+        "VQT provides 120 bins (0-119) with logarithmic frequency spacing for musical analysis.\n"                      \
+        "Bin frequency is 19.445 * 2^(bin/12) Hz; bin 0 is D#0/Eb0.\n"                                                  \
+        "Returns raw magnitude without peak normalization.",                                                            \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                              \
+                                                                                                                        \
+    macro(vqtrs,                                                                                                        \
+        "vqtrs(bin)",                                                                                                   \
+                                                                                                                        \
+        "Get raw smoothed Variable-Q Transform magnitude for a specific frequency bin.\n"                               \
+        "VQT provides 120 bins (0-119) with logarithmic frequency spacing for musical analysis.\n"                      \
+        "Bin frequency is 19.445 * 2^(bin/12) Hz; bin 0 is D#0/Eb0.\n"                                                  \
+        "Returns raw smoothed magnitude without peak normalization.",                                                   \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                              \
+                                                                                                                        \
+    macro(vqtw,                                                                                                         \
+        "vqtw(bin)",                                                                                                    \
+                                                                                                                       \
+        "Get peak-normalized whitened VQT magnitude for a bin.\n"                                                       \
+        "Whitening evens out the spectral envelope so notes stand out.\n"                                          \
+        "Bin mapping: 0-119 (10 octaves × 12 notes).",                                                                 \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                              \
+                                                                                                                        \
+    macro(vqtsw,                                                                                                        \
+        "vqtsw(bin)",                                                                                                   \
+                                                                                                                       \
+        "Get smoothed, peak-normalized whitened VQT magnitude for a bin.\n"                                           \
+        "Useful for visuals with stable dynamics.",                                                                    \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                              \
+                                                                                                                        \
+    macro(vqtrw,                                                                                                        \
+        "vqtrw(bin)",                                                                                                   \
+                                                                                                                       \
+        "Get raw (non-normalized) whitened VQT magnitude for a bin.\n"                                               \
+        "Whitened but without peak auto-gain control.",                                                                \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                              \
+                                                                                                                        \
+    macro(vqtrsw,                                                                                                       \
+        "vqtrsw(bin)",                                                                                                  \
+                                                                                                                       \
+        "Get raw smoothed whitened VQT magnitude for a bin.\n"                                                        \
+        "Smoothed, without peak auto-gain control.",                                                                    \
+        1,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 bin)                                                                                                              \
+    macro(fftr,                                                                                                         \
+        "fftr(start_freq end_freq=-1)",                                                                                 \
+                                                                                                                        \
+        "Retrieves a value from 1024 buckets that map to a region of audible frequencies.\n"                            \
+        "Returns raw magnitudes before amplification and peak normalization.\n"                                         \
+        "If end_freq is not provided, a single value is returned for the start_freq.\n"                                 \
+        "If end_freq is provided, a sum of all values in the range is returned.",                                       \
+        2,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
+        tic_mem*, s32 startFreq, s32 endFreq)                                                                           \
+                                                                                                                        \
+                                                                                                                        \
+    macro(fftrs,                                                                                                        \
+        "fftrs(start_freq end_freq=-1)",                                                                                \
+                                                                                                                        \
+        "Retrieves a value from 1024 buckets that map to a region of audible frequencies.\n"                            \
+        "Returns smoothed raw magnitudes before amplification and peak normalization.\n"                                \
+        "If end_freq is not provided, a single value is returned for the start_freq.\n"                                 \
+        "If end_freq is provided, a sum of all values in the range is returned.",                                       \
+        2,                                                                                                              \
+        1,                                                                                                              \
+        0,                                                                                                              \
+        double,                                                                                                         \
         tic_mem*, s32 startFreq, s32 endFreq)
+// clang-format on
 
 #define TIC_API_DEF(name, _, __, ___, ____, _____, ret, ...) ret tic_api_##name(__VA_ARGS__);
 TIC_API_LIST(TIC_API_DEF)
@@ -840,11 +1022,11 @@ TIC_API_LIST(TIC_API_DEF)
 
 struct tic_mem
 {
-    tic80           product;
-    tic_ram*        ram;
-    tic_cartridge   cart;
+    tic80 product;
+    tic_ram* ram;
+    tic_cartridge cart;
 
-    tic_ram*        base_ram;
+    tic_ram* base_ram;
 
     char saveid[TIC_SAVEID_SIZE];
 
@@ -853,15 +1035,15 @@ struct tic_mem
         struct
         {
 #if RETRO_IS_BIG_ENDIAN
-            u8 padded:5;
-            u8 keyboard:1;
-            u8 mouse:1;
-            u8 gamepad:1;
+            u8 padded : 5;
+            u8 keyboard : 1;
+            u8 mouse : 1;
+            u8 gamepad : 1;
 #else
-            u8 gamepad:1;
-            u8 mouse:1;
-            u8 keyboard:1;
-            u8 padded:5;
+            u8 gamepad : 1;
+            u8 mouse : 1;
+            u8 keyboard : 1;
+            u8 padded : 5;
 #endif
         };
 
@@ -873,13 +1055,22 @@ tic_mem* tic_core_create(s32 samplerate, tic80_pixel_color_format format);
 void tic_core_close(tic_mem* memory);
 void tic_core_pause(tic_mem* memory);
 void tic_core_resume(tic_mem* memory);
+bool tic_core_script_ready(tic_mem* memory);
 void tic_core_tick_start(tic_mem* memory);
 void tic_core_tick(tic_mem* memory, tic_tick_data* data);
 void tic_core_tick_end(tic_mem* memory);
 void tic_core_synth_sound(tic_mem* tic);
 void tic_core_blit(tic_mem* tic);
 void tic_core_blit_ex(tic_mem* tic, tic_blit_callback clb);
+#if defined(BUILD_RENDER_CACHE)
+bool tic_core_is_dirty(tic_mem* memory);
+void tic_core_invalidate(tic_mem* memory);
+void tic_core_draw_cache_set_enabled(tic_mem* memory, bool enabled);
+bool tic_core_draw_cache_is_enabled(tic_mem* memory);
+#endif
 
+// clang-format off
 #define VBANK(tic, bank)                                \
     bool MACROVAR(_bank_) = tic_api_vbank(tic, bank);   \
     SCOPE(tic_api_vbank(tic, MACROVAR(_bank_)))
+// clang-format on

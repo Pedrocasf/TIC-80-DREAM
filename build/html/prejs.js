@@ -30,3 +30,58 @@ Module.showAddPopup = function(callback)
 		reader.readAsArrayBuffer(file);
 	};
 };
+// The safe-area insets are only readable from CSS, and they change with the
+// orientation and with the browser's own bars, so the page pushes them in
+// whenever the viewport moves. The probe element is what makes env() readable.
+Module.tic80Viewport = function()
+{
+	if(!Module._tic80_insets) return;
+
+	var probe = Module.tic80Probe;
+
+	if(!probe)
+	{
+		probe = document.createElement('div');
+		probe.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden;' +
+			'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+		document.body.appendChild(probe);
+		Module.tic80Probe = probe;
+	}
+
+	var style = getComputedStyle(probe);
+	var value = function(name) { return parseFloat(style.getPropertyValue(name)) || 0; };
+
+	// The player lays out in framebuffer pixels; env() reports CSS ones.
+	var scale = window.devicePixelRatio || 1;
+
+	Module._tic80_insets(value('padding-top') * scale, value('padding-right') * scale, value('padding-bottom') * scale, value('padding-left') * scale);
+};
+
+(function()
+{
+	Module.tic80Viewport();
+	addEventListener('resize', Module.tic80Viewport);
+	addEventListener('orientationchange', Module.tic80Viewport);
+
+	// The iOS URL bar and the soft keyboard move the visual viewport without a
+	// window resize.
+	if(window.visualViewport)
+	{
+		visualViewport.addEventListener('resize', Module.tic80Viewport);
+		visualViewport.addEventListener('scroll', Module.tic80Viewport);
+	}
+
+	// A home-screen app on iOS can miss the resize on rotation; nudge the player when the canvas box moves.
+	if(window.ResizeObserver)
+	{
+		var canvas = Module.canvas || document.getElementById('canvas');
+
+		if(canvas)
+		{
+			new ResizeObserver(function()
+			{
+				requestAnimationFrame(function() { dispatchEvent(new Event('resize')); });
+			}).observe(canvas);
+		}
+	}
+})();

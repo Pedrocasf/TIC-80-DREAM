@@ -1,0 +1,146 @@
+// MIT License
+
+// Copyright (c) 2017 Vadim Grigoruk @nesbox // grigoruk@gmail.com
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+#pragma once
+
+#include "tic.h"
+#include "studio/clipboard.h"
+#include "studio/keyboard.h"
+#include "studio/mouse.h"
+
+typedef struct Music Music;
+
+// What the host gives the editor once: the machine, the pointer states, the
+// tooltip ask and the option that picks the first tab.
+typedef struct
+{
+    void* host;
+    tic_mem* tic;
+    MouseState* mouse;
+    bool tracker;
+
+    void (*tooltip)(void* host, const char* text);
+
+} MusicDeps;
+
+// The frame: the bar's flags and the cart's bank0 tiles the icons come from.
+typedef struct
+{
+    struct
+    {
+        bool captured;
+        bool pointerOwned;
+        ClipboardEvent clipboard;
+
+    } frame;
+
+    const tic_tiles* cartTiles;
+
+} MusicView;
+
+struct Music
+{
+    MusicDeps deps;
+    const MusicView* view;
+
+    tic_mem* tic;
+    tic_music* src;
+
+    u8 track;
+    s32 frame;
+    s32 row;
+
+    s32 startFrame;
+    s32 startRow;
+
+    struct
+    {
+        s32 pos;
+        s32 start;
+        bool active;
+        bool changed;
+    } scroll;
+
+    bool beat34;
+    bool follow;
+    bool sustain;
+    bool loop;
+    bool on[TIC_SOUND_CHANNELS];
+
+    struct
+    {
+        s32 octave;
+        s32 sfx;
+    } last;
+
+    struct
+    {
+        s32 col;
+        tic_point edit;
+
+        struct
+        {
+            tic_point start;
+            tic_rect rect;
+            bool drag;
+        } select;
+    } tracker;
+
+    struct
+    {
+        s32 col;
+        tic_point edit;
+        s8 note[TIC_SOUND_CHANNELS];
+    } piano;
+
+    enum
+    {
+        MUSIC_TRACKER_TAB,
+        MUSIC_PIANO_TAB,
+        MUSIC_TAB_COUNT,
+    } tab;
+
+    struct
+    {
+        const char* label;
+        s32 x;
+        s32 start;
+    } drag;
+
+    u32 tickCounter;
+
+    struct History* history;
+};
+
+extern const ClipboardOps MusicClipboard;
+
+void initMusic(Music*, const MusicDeps*, tic_music* src);
+void music_set_view(Music*, const MusicView*);
+void music_tick(Music*);
+void freeMusic(Music* music);
+void musicToggleFollow(Music*);
+void musicToggleLoop(Music*);
+void musicToggleSustain(Music*);
+void musicPlayFromNow(Music*);
+void musicPlayFrame(Music*);
+void musicPlayTrack(Music*, bool);
+void musicStop(Music*);

@@ -9,6 +9,28 @@ set(TIC80STUDIO_SRC
     ${TIC80LIB_DIR}/studio/screens/mainmenu.c
     ${TIC80LIB_DIR}/studio/screens/start.c
     ${TIC80LIB_DIR}/studio/studio.c
+    # The mode machine's decisions: the door, the return target, the run
+    # record and the ESC rule, pure over a state value.
+    ${TIC80LIB_DIR}/studio/modes.c
+    # The state of a launch that came with a cart: every build boots, so this
+    # is not editors-only.
+    ${TIC80LIB_DIR}/studio/boot.c
+    ${TIC80LIB_DIR}/studio/anim.c
+    # The cart an app image carries, which `export game` writes and the launch
+    # reads: bytes and the core's zipper, with no studio in it.
+    ${TIC80LIB_DIR}/studio/embed.c
+    # The sound the studio plays, which the menus, the splash and the panels all
+    # reach: every build has a reason to hear it.
+    ${TIC80LIB_DIR}/studio/sound.c
+    # The icon and the cursor every screen draws with: the menu needs both in
+    # builds that have no bar and never will.
+    ${TIC80LIB_DIR}/studio/ui.c
+    # What the machine's keyboard says, which the editors and the console ask
+    # about more than any other one thing.
+    ${TIC80LIB_DIR}/studio/keyboard.c
+    # The pointer and the buttons, beside the state mouse.h already declared.
+    ${TIC80LIB_DIR}/studio/mouse.c
+    ${TIC80LIB_DIR}/studio/rom.c
     ${TIC80LIB_DIR}/studio/config.c
     ${TIC80LIB_DIR}/studio/fs.c
     ${TIC80LIB_DIR}/ext/md5.c
@@ -16,28 +38,40 @@ set(TIC80STUDIO_SRC
     ${TIC80LIB_DIR}/ext/png.c
 )
 
+# net.c serves the console as much as the browser: the version check and the
+# site filesystem both go through it, so it stays whenever either is built.
+if(BUILD_EDITORS OR BUILD_SURF)
+    set(TIC80STUDIO_SRC ${TIC80STUDIO_SRC}
+        ${TIC80LIB_DIR}/studio/net.c
+    )
+endif()
+
 if(BUILD_SURF)
     set(TIC80STUDIO_SRC ${TIC80STUDIO_SRC}
         ${TIC80LIB_DIR}/studio/screens/surf.c
-        ${TIC80LIB_DIR}/studio/net.c
     )
-
-    if(NOT BUILD_EDITORS)
-        set(TIC80STUDIO_SRC ${TIC80STUDIO_SRC}
-            ${TIC80LIB_DIR}/studio/screens/console_minimal.c
-        )
-    endif()
 endif()
 
 if(BUILD_EDITORS)
     set(TIC80STUDIO_SRC ${TIC80STUDIO_SRC}
+        # The bar is the editors' shell: a build without them never draws it.
+        ${TIC80LIB_DIR}/studio/menubar.c
+        ${TIC80LIB_DIR}/studio/studiomenu.c
+        # The export commands the bar sends: the name, the suffix and the
+        # arguments, tested without the studio.
+        ${TIC80LIB_DIR}/studio/export.c
         ${TIC80LIB_DIR}/studio/screens/console.c
-        ${TIC80LIB_DIR}/studio/editors/code.c
-        ${TIC80LIB_DIR}/studio/editors/sprite.c
-        ${TIC80LIB_DIR}/studio/editors/map.c
-        ${TIC80LIB_DIR}/studio/editors/world.c
-        ${TIC80LIB_DIR}/studio/editors/sfx.c
-        ${TIC80LIB_DIR}/studio/editors/music.c
+        ${TIC80LIB_DIR}/studio/clipboard.c
+        ${TIC80LIB_DIR}/studio/editors/code/text.c
+        ${TIC80LIB_DIR}/studio/editors/code/find.c
+        ${TIC80LIB_DIR}/studio/editors/code/vi.c
+        ${TIC80LIB_DIR}/studio/editors/code/minimap.c
+        ${TIC80LIB_DIR}/studio/editors/code/code.c
+        ${TIC80LIB_DIR}/studio/editors/sprite/sprite.c
+        ${TIC80LIB_DIR}/studio/editors/map/map.c
+        ${TIC80LIB_DIR}/studio/editors/map/world.c
+        ${TIC80LIB_DIR}/studio/editors/sfx/sfx.c
+        ${TIC80LIB_DIR}/studio/editors/music/music.c
         ${TIC80LIB_DIR}/ext/history.c
         ${TIC80LIB_DIR}/ext/gif.c
     )

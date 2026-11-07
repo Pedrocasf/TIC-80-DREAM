@@ -26,16 +26,16 @@
 #include "tools.h"
 #include "script.h"
 
-#define CLOCKRATE (255<<13)
-#define TIC_DEFAULT_COLOR 15
+#define CLOCKRATE             (255 << 13)
+#define TIC_DEFAULT_COLOR     15
 #define TIC_SOUND_RINGBUF_LEN 12 // in worst case, this induces ~ 12 tick delay i.e. 200 ms
 
 typedef struct
 {
-    s32 time;       /* clock time of next delta */
-    s32 phase;      /* position within waveform */
-    s32 amp;        /* current amplitude in delta buffer */
-}tic_sound_register_data;
+    s32 time;  /* clock time of next delta */
+    s32 phase; /* position within waveform */
+    s32 amp;   /* current amplitude in delta buffer */
+} tic_sound_register_data;
 
 typedef struct
 {
@@ -45,10 +45,10 @@ typedef struct
     s32 note;
     struct
     {
-        u8 left:4;
-        u8 right:4;
+        u8 left : 4;
+        u8 right : 4;
     } volume;
-    s8 speed:SFX_SPEED_BITS;
+    s8 speed : SFX_SPEED_BITS;
     s32 duration;
 } tic_channel_data;
 
@@ -57,15 +57,15 @@ typedef struct
     struct
     {
         s32 tick;
-        u8 note1:4;
-        u8 note2:4;
+        u8 note1 : 4;
+        u8 note2 : 4;
     } chord;
 
     struct
     {
         s32 tick;
-        u8 period:4;
-        u8 depth:4;
+        u8 period : 4;
+        u8 depth : 4;
     } vibrato;
 
     struct
@@ -165,13 +165,27 @@ typedef struct
         s32 l, t, r, b;
     } clip;
 
+#if defined(BUILD_RENDER_CACHE)
+    bool has_scn;
+    bool has_bdr;
+#endif
     bool initialized;
 } tic_core_state_data;
+
+#if defined(BUILD_RENDER_CACHE)
+struct tic_draw_cache;
+#endif
 
 typedef struct
 {
     tic_mem memory; // it should be first
+#if defined(BUILD_RENDER_CACHE)
+    struct tic_draw_cache* draw_cache;
+#endif
     tic80_pixel_color_format screen_format;
+
+    // Byte-pair caches for the screen composition.
+    u64 blit_pairs[2][TIC_PALETTE_SIZE * TIC_PALETTE_SIZE];
 
     void* currentVM;
     const tic_script* currentScript;
@@ -185,6 +199,18 @@ typedef struct
     s32 samplerate;
     tic_tick_data* data;
     tic_core_state_data state;
+
+#if defined(BUILD_RENDER_CACHE)
+    struct
+    {
+        tic_vram vbank0;
+        tic_vram vbank1;
+        tic80_pixel_color_format format;
+        bool valid;
+    } saved_vram;
+
+    bool screen_dirty;
+#endif
 
     struct
     {
@@ -201,9 +227,9 @@ typedef struct
 
     struct
     {
-    #define API_FUNC_DEF(name, _, __, ___, ____, _____, ret, ...) ret (*name)(__VA_ARGS__);
+#define API_FUNC_DEF(name, _, __, ___, ____, _____, ret, ...) ret (*name)(__VA_ARGS__);
         TIC_API_LIST(API_FUNC_DEF)
-    #undef  API_FUNC_DEF
+#undef API_FUNC_DEF
 
 #if defined BUILD_DEPRECATED
         void (*textri)(tic_mem* tic, float x1, float y1, float x2, float y2, float x3, float y3, float u1, float v1, float u2, float v2, float u3, float v3, bool use_map, u8* colors, s32 count);
@@ -219,14 +245,18 @@ void tic_core_sound_tick_end(tic_mem* memory);
 #if defined(BUILD_DEPRECATED)
 // mouse cursor is the same in both modes
 // for backward compatibility
+// clang-format off
 #define OVR_COMPAT(CORE, BANK)                                              \
     core->api.vbank(&CORE->memory, BANK),                                     \
     CORE->memory.ram->vram.vars.cursor = CORE->state.vbank.mem.vars.cursor
+// clang-format on
 
+// clang-format off
 #define OVR(CORE)                                   \
     s32 MACROVAR(_bank_) = CORE->state.vbank.id;    \
     OVR_COMPAT(CORE, 1);                            \
     core->api.cls(&CORE->memory, 0);                  \
     SCOPE(OVR_COMPAT(CORE, MACROVAR(_bank_)))
+// clang-format on
 
 #endif

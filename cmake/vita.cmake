@@ -102,6 +102,9 @@ if(VITA)
             SceNetCtl_stub)
     endif()
 
+    # plain, not keyword: sdl.cmake links this target plainly and cmake will not
+    # have both on one target. The sokol layer is the keyword one, and the Vita
+    # never builds it.
     target_link_libraries(${TIC80_TARGET}
         ScePower_stub
         SceAppMgr_stub

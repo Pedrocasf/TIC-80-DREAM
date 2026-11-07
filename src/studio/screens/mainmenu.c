@@ -20,10 +20,16 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include "studio/studio.h"
-#include "studio/config.h"
-#include "studio/screens/menu.h"
 #include "mainmenu.h"
+#include "studio/screens/menu.h"
+#include "studio/system.h"
+#include "script.h"
+#include "tic_assert.h"
+#include "tools.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef struct
 {
@@ -34,34 +40,36 @@ typedef struct
 
 struct StudioMainMenu
 {
-    Studio* studio;
+    MainMenuDeps deps;
+
     tic_mem* tic;
     Menu* menu;
+    struct StudioOptions* options;
 
     MenuItem* items;
     s32 count;
 
     Gamepads gamepads;
-    struct StudioOptions* options;
 };
 
+// clang-format off
 #define OPTION_VALUES(...)                          \
     .values = (const char*[])__VA_ARGS__,           \
     .count = COUNT_OF(((const char*[])__VA_ARGS__))
+// clang-format on
 
 static void showMainMenu(void* data, s32 pos);
 static void onBackFromOptionsMenu(void* data, s32 pos);
 
-StudioMainMenu* studio_mainmenu_init(Menu *menu, Config *config)
+StudioMainMenu* mainmenu_init(const MainMenuDeps* deps)
 {
     StudioMainMenu* main = NEW(StudioMainMenu);
 
-    *main = (StudioMainMenu)
-    {
-        .menu = menu,
-        .options = &config->data.options,
-        .studio = config->studio,
-        .tic = config->tic,
+    *main = (StudioMainMenu){
+        .deps = *deps,
+        .menu = deps->menu,
+        .options = deps->options,
+        .tic = deps->tic,
         .gamepads.key = -1,
     };
 
@@ -72,7 +80,7 @@ StudioMainMenu* studio_mainmenu_init(Menu *menu, Config *config)
 
 static void initGamepadMenu(StudioMainMenu* menu);
 
-bool studio_mainmenu_keyboard(StudioMainMenu* main)
+bool mainmenu_keyboard(StudioMainMenu* main)
 {
     if(main && main->gamepads.key >= 0)
     {
@@ -89,8 +97,13 @@ bool studio_mainmenu_keyboard(StudioMainMenu* main)
     return false;
 }
 
+static const char OffValue[] = "OFF";
+static const char OnValue[] = "ON";
+
+#if !defined(__ANDROID__)
 static s32 optionFullscreenGet(void* data)
 {
+    (void)data;
     return tic_sys_fullscreen_get() ? 1 : 0;
 }
 
@@ -100,15 +113,14 @@ static void optionFullscreenSet(void* data, s32 pos)
     tic_sys_fullscreen_set(main->options->fullscreen = (pos == 1));
 }
 
-static const char OffValue[] =  "OFF";
-static const char OnValue[] =   "ON";
-
 static MenuOption FullscreenOption =
-{
-    OPTION_VALUES({OffValue, OnValue}),
-    optionFullscreenGet,
-    optionFullscreenSet,
+    {
+        OPTION_VALUES({OffValue, OnValue}),
+        optionFullscreenGet,
+        optionFullscreenSet,
 };
+
+#endif
 
 static s32 optionIntegerScaleGet(void* data)
 {
@@ -123,11 +135,33 @@ static void optionIntegerScaleSet(void* data, s32 pos)
 }
 
 static MenuOption IntegerScaleOption =
-{
-    OPTION_VALUES({OffValue, OnValue}),
-    optionIntegerScaleGet,
-    optionIntegerScaleSet,
+    {
+        OPTION_VALUES({OffValue, OnValue}),
+        optionIntegerScaleGet,
+        optionIntegerScaleSet,
 };
+
+#if defined(BUILD_RENDER_CACHE)
+static s32 optionDrawCacheGet(void* data)
+{
+    StudioMainMenu* main = data;
+    return main->options->drawCache ? 1 : 0;
+}
+
+static void optionDrawCacheSet(void* data, s32 pos)
+{
+    StudioMainMenu* main = data;
+    main->options->drawCache = (pos == 1);
+    tic_core_draw_cache_set_enabled(main->tic, main->options->drawCache);
+}
+
+static MenuOption DrawCacheOption =
+    {
+        OPTION_VALUES({OffValue, OnValue}),
+        optionDrawCacheGet,
+        optionDrawCacheSet,
+};
+#endif
 
 #if defined(CRT_SHADER_SUPPORT)
 static s32 optionCrtMonitorGet(void* data)
@@ -143,14 +177,18 @@ static void optionCrtMonitorSet(void* data, s32 pos)
 }
 
 static MenuOption CrtMonitorOption =
-{
-    OPTION_VALUES({OffValue, OnValue}),
-    optionCrtMonitorGet,
-    optionCrtMonitorSet,
+    {
+        OPTION_VALUES({OffValue, OnValue}),
+        optionCrtMonitorGet,
+        optionCrtMonitorSet,
 };
 
 #endif
 
+// A layer that makes its window before the studio reads its config can never
+// honor this: sokol's cannot, so it runs at the display's rate and the menu
+// does not offer what it cannot do.
+#if !defined(VSYNC_ALWAYS_ON)
 static s32 optionVSyncGet(void* data)
 {
     StudioMainMenu* main = data;
@@ -164,11 +202,12 @@ static void optionVSyncSet(void* data, s32 pos)
 }
 
 static MenuOption VSyncOption =
-{
-    OPTION_VALUES({OffValue, OnValue}),
-    optionVSyncGet,
-    optionVSyncSet,
+    {
+        OPTION_VALUES({OffValue, OnValue}),
+        optionVSyncGet,
+        optionVSyncSet,
 };
+#endif
 
 static s32 optionVolumeGet(void* data)
 {
@@ -183,115 +222,33 @@ static void optionVolumeSet(void* data, s32 pos)
 }
 
 static MenuOption VolumeOption =
-{
-    OPTION_VALUES(
     {
-        "00", "01", "02", "03",
-        "04", "05", "06", "07",
-        "08", "09", "10", "11",
-        "12", "13", "14", "15",
-    }),
-    optionVolumeGet,
-    optionVolumeSet,
+        OPTION_VALUES(
+            {
+                "00",
+                "01",
+                "02",
+                "03",
+                "04",
+                "05",
+                "06",
+                "07",
+                "08",
+                "09",
+                "10",
+                "11",
+                "12",
+                "13",
+                "14",
+                "15",
+            }),
+        optionVolumeGet,
+        optionVolumeSet,
 };
-
-static s32 optionAutoSaveGet(void* data)
-{
-    StudioMainMenu* main = data;
-    return main->options->autosave ? 1 : 0;
-}
-
-static void optionAutoSaveSet(void* data, s32 pos)
-{
-    StudioMainMenu* main = data;
-    main->options->autosave = pos == 1;
-}
-
-static MenuOption AutoSaveOption =
-{
-    OPTION_VALUES({OffValue, OnValue}),
-    optionAutoSaveGet,
-    optionAutoSaveSet,
-};
-
-#if defined(BUILD_EDITORS)
-static s32 optionTabSizeGet(void* data)
-{
-    StudioMainMenu* main = data;
-    s32 tsize = main->options->tabSize;
-
-    s32 ret = 0;
-    tsize /= 2;
-    while(tsize != 0) {
-        ret++;
-        tsize /= 2;
-    }
-
-    return ret;
-}
-
-static void optionTabSizeSet(void* data, s32 pos)
-{
-    s32 tsize = 1;
-    for (s32 i = 0; i < pos; i++)
-        tsize *= 2;
-    StudioMainMenu* main = data;
-    main->options->tabSize = tsize;
-}
-
-static MenuOption TabSizeOption =
-{
-    OPTION_VALUES({"1", "2", "4", "8"}),
-    optionTabSizeGet,
-    optionTabSizeSet,
-};
-
-static s32 optionTabModeGet(void* data)
-{
-    StudioMainMenu* main = data;
-    return main->options->tabMode;
-}
-
-static void optionTabModeSet(void* data, s32 pos)
-{
-    StudioMainMenu* main = data;
-    main->options->tabMode = (enum TabMode) pos;
-}
-
-
-static MenuOption TabModeOption =
-{
-    OPTION_VALUES({"AUTO", "TABS", "SPACES"}),
-    optionTabModeGet,
-    optionTabModeSet,
-};
-
-
-static s32 optionKeybindModeGet(void* data)
-{
-    StudioMainMenu* main = data;
-    return main->options->keybindMode;
-}
-
-static void optionKeybindModeSet(void* data, s32 pos)
-{
-    StudioMainMenu* main = data;
-    main->options->keybindMode = (enum KeybindMode) pos;
-}
-
-static MenuOption KeybindModeOption =
-{
-    OPTION_VALUES({"STANDARD", "EMACS", "VI"}),
-    optionKeybindModeGet,
-    optionKeybindModeSet,
-};
-
-static void showEditorMenu(void* data, s32 pos);
-
-#endif
 
 static void showGamepadMenu(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
     main->gamepads.index = 0;
     main->gamepads.mapping = main->options->mapping;
@@ -304,71 +261,64 @@ enum
 #if defined(CRT_SHADER_SUPPORT)
     OptionsMenu_CrtMonitorOption,
 #endif
+#if !defined(VSYNC_ALWAYS_ON)
     OptionsMenu_VSyncOption,
-    OptionsMenu_FullscreenOption,
-    OptionsMenu_IntegerScaleOption,
-    OptionsMenu_VolumeOption,
-#if defined(BUILD_EDITORS)
-    OptionsMenu_Editor,
 #endif
+#if !defined(__ANDROID__)
+    OptionsMenu_FullscreenOption,
+#endif
+    OptionsMenu_IntegerScaleOption,
+#if defined(BUILD_RENDER_CACHE)
+    OptionsMenu_DrawCacheOption,
+#endif
+    OptionsMenu_VolumeOption,
     OptionsMenu_Gamepad,
     OptionsMenu_Separator,
     OptionsMenu_Back,
 };
 
 static const MenuItem OptionMenu[] =
-{
+    {
 #if defined(CRT_SHADER_SUPPORT)
-    {"CRT MONITOR",     NULL,   &CrtMonitorOption},
+        {.label = "CRT MONITOR", .option = &CrtMonitorOption},
 #endif
-    {"VSYNC",           NULL,   &VSyncOption, "VSYNC needs restart!"},
-    {"FULLSCREEN",      NULL,   &FullscreenOption},
-    {"INTEGER SCALE",   NULL,   &IntegerScaleOption},
-    {"VOLUME",          NULL,   &VolumeOption},
-    {"AUTOSAVE",        NULL,   &AutoSaveOption, "Keep carts loaded from the web"},
-#if defined(BUILD_EDITORS)
-    {"EDITOR OPTIONS", showEditorMenu},
+#if !defined(VSYNC_ALWAYS_ON)
+        {.label = "VSYNC", .option = &VSyncOption, .help = "VSYNC needs restart!"},
 #endif
-    {"SETUP GAMEPAD",       showGamepadMenu},
-    {""},
-    {"BACK",            onBackFromOptionsMenu, .back = true},
+#if !defined(__ANDROID__)
+        {.label = "FULLSCREEN", .option = &FullscreenOption},
+#endif
+        {.label = "INTEGER SCALE", .option = &IntegerScaleOption},
+#if defined(BUILD_RENDER_CACHE)
+        {.label = "DRAW CACHE", .option = &DrawCacheOption, .help = "Cache draw calls for CPU saving"},
+#endif
+        {.label = "VOLUME", .option = &VolumeOption},
+        {.label = "SETUP GAMEPAD", .handler = showGamepadMenu},
+        {.label = ""},
+        {.label = "BACK", .handler = onBackFromOptionsMenu, .back = true},
 };
+
+// The menu cursor is an index into the table — a submenu returns to
+// OptionsMenu_<row> (menu.c backDone) — so an entry added to one and not to
+// the other silently points every later row one off. The autosave row did
+// exactly that; the assert is what catches the next one.
+static_assert(COUNT_OF(OptionMenu) == OptionsMenu_Back + 1, "OptionMenuCount");
 
 static void showOptionsMenu(void* data, s32 pos);
 static void gameMenuHandler(void* data, s32 pos)
 {
     StudioMainMenu* main = data;
     tic_mem* tic = main->tic;
-    resumeGame(main->studio);
+
+    // The menu can also be opened in the studio, where there is no pause to
+    // return to: start the cart as RUN would.
+    if(main->deps.runPaused(main->deps.host))
+        main->deps.resume(main->deps.host);
+    else
+        main->deps.run(main->deps.host);
+
     tic_get_script(tic)->callback.menu(tic, pos, NULL);
 }
-
-#if defined(BUILD_EDITORS)
-
-enum
-{
-    EditorMenu_KeybindMode,
-    EditorMenu_Separator,
-    EditorMenu_Back,
-};
-
-static const MenuItem EditorMenu[] =
-{
-    {"TAB SIZE",          NULL,   &TabSizeOption,     "Indentation is your friend"},
-    {"TAB MODE",          NULL,   &TabModeOption,     "Auto uses spaces for python/moonscript"},
-    {"KEYBIND MODE",      NULL,   &KeybindModeOption, "For the cool kids only"},
-    {""},
-    {"BACK",            showOptionsMenu, .back = true},
-};
-
-static void showEditorMenu(void* data, s32 pos)
-{
-    StudioMainMenu* main = data;
-
-    studio_menu_init(main->menu, EditorMenu,
-        COUNT_OF(EditorMenu), EditorMenu_KeybindMode, OptionsMenu_Editor, showOptionsMenu, main);
-}
-#endif
 
 static void freeItems(StudioMainMenu* menu)
 {
@@ -383,7 +333,7 @@ static void freeItems(StudioMainMenu* menu)
     }
 }
 
-void studio_mainmenu_free(StudioMainMenu* menu)
+void mainmenu_free(StudioMainMenu* menu)
 {
     freeItems(menu);
     FREE(menu);
@@ -403,22 +353,23 @@ static void initGameMenu(StudioMainMenu* main)
 
         SCOPE(free(menu))
         {
-            MenuItem *items = NULL;
+            MenuItem* items = NULL;
             s32 count = 0;
 
-            char* label = strtok(menu, " ");
+            char* save = NULL;
+            char* label = tic_strtok_r(menu, " ", &save);
             while(label)
             {
                 items = realloc(items, sizeof(MenuItem) * ++count);
-                items[count - 1] = (MenuItem){strdup(label), gameMenuHandler};
+                items[count - 1] = (MenuItem){.label = strdup(label), .handler = gameMenuHandler};
 
-                label = strtok(NULL, " ");
+                label = tic_strtok_r(NULL, " ", &save);
             }
 
             count += 2;
             items = realloc(items, sizeof(MenuItem) * count);
-            items[count - 2] = (MenuItem){strdup("")};
-            items[count - 1] = (MenuItem){strdup("BACK"), showMainMenu, .back = true};
+            items[count - 2] = (MenuItem){.label = strdup("")};
+            items[count - 1] = (MenuItem){.label = strdup("BACK"), .handler = showMainMenu, .back = true};
 
             main->items = items;
             main->count = count;
@@ -428,70 +379,87 @@ static void initGameMenu(StudioMainMenu* main)
 
 static void showGameMenu(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
-    studio_menu_init(main->menu, main->items, main->count, 0, 0, showMainMenu, main);
+    menu_init(main->menu, main->items, main->count, 0, 0, showMainMenu, main);
 }
 
 static inline s32 mainMenuOffset(StudioMainMenu* menu)
 {
-    if (menu->count > 0) return 0;
-
-    if (!studio_is_cart_loaded(menu->studio))
-        return 3;
-
-    return 1;
+    // Only the game menu of the loaded cart can be missing, so the entry
+    // point is the item right after it. Skipping further (#2889) hid RESUME
+    // GAME and RESET GAME whenever no cart was loaded, which put a lone
+    // CLOSE GAME on top of the menu.
+    return menu->count ? 0 : 1;
 }
 
 static void onBackFromOptionsMenu(void* data, s32 pos)
 {
     StudioMainMenu* main = data;
-    Config* config = studio_config_get(main->studio);
-    config->saveOptions(config);
+    main->deps.saveOptions(main->deps.host);
 
     showMainMenu(data, pos);
 }
 
 static void onResumeGame(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
-    resumeGame(main->studio);
+
+    // Opened in the studio, there is no pause to return to; start the cart.
+    if(main->deps.runPaused(main->deps.host))
+        main->deps.resume(main->deps.host);
+    else
+        main->deps.run(main->deps.host);
+}
+
+// The back of the top level menu (ESC or the gamepad's B): the menu sits over
+// a paused run and belongs to whoever started it — a player's run resumes
+// under it, while a dev run, a menu opened in the studio, and a run whose
+// pause a reload cleared step out to runFrom. The same step ESC takes in RUN
+// mode, so a run of a cart with a game menu is left with ESC ESC instead of a
+// walk to CLOSE GAME (#2937).
+static void onMenuBack(void* data, s32 pos)
+{
+    StudioMainMenu* main = data;
+
+    if(main->deps.menuOverPlayerRun(main->deps.host))
+        onResumeGame(data, pos);
+    else
+        main->deps.leave(main->deps.host);
 }
 
 static void onResetGame(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
     tic_api_reset(main->tic);
-    setStudioMode(main->studio, TIC_RUN_MODE);
+    main->deps.setRunMode(main->deps.host);
 }
 
 static void onExitStudio(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
-    exitStudio(main->studio);
+    main->deps.exitStudio(main->deps.host);
 }
 
+#if defined(BUILD_EDITORS) || defined(BUILD_SURF)
 static void onExitGame(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
-    exitGame(main->studio);
+    main->deps.exitGame(main->deps.host);
 }
-
-static void onSurf(void* data, s32 pos)
-{
-    StudioMainMenu* main = data;
-    setStudioMode(main->studio, TIC_SURF_MODE);
-}
+#endif
 
 enum MainMenu
 {
     MainMenu_GameMenu,
     MainMenu_ResumeGame,
     MainMenu_ResetGame,
-#if defined(BUILD_EDITORS)
+#if defined(BUILD_EDITORS) || defined(BUILD_SURF)
     MainMenu_CloseGame,
-#endif
-#if defined(BUILD_SURF)
-    MainMenu_Surf,
 #endif
     MainMenu_Options,
     MainMenu_Separator,
@@ -499,28 +467,30 @@ enum MainMenu
 };
 
 static const MenuItem MainMenu[] =
-{
-    {"GAME MENU",   showGameMenu},
-    {"RESUME GAME", onResumeGame},
-    {"RESET GAME",  onResetGame},
+    {
+        {.label = "GAME MENU", .handler = showGameMenu},
+        {.label = "RESUME GAME", .handler = onResumeGame},
+        {.label = "RESET GAME", .handler = onResetGame},
 #if defined(BUILD_EDITORS)
-    {"CLOSE GAME",  onExitGame, NULL, "Press F1 to switch to editor"},
+        {.label = "CLOSE GAME", .handler = onExitGame, .help = "Press F1 to switch to editor"},
+#elif defined(BUILD_SURF)
+        {.label = "CLOSE GAME", .handler = onExitGame},
 #endif
-#if defined(BUILD_SURF)
-    {"SURF",        onSurf},
-#endif
-    {"OPTIONS",     showOptionsMenu},
-    {""},
-    {"QUIT TIC-80", onExitStudio},
+        {.label = "OPTIONS", .handler = showOptionsMenu},
+        {.label = ""},
+        {.label = "QUIT TIC-80", .handler = onExitStudio},
 };
+
+static_assert(COUNT_OF(MainMenu) == MainMenu_Quit + 1, "MainMenuCount");
 
 static void showMainMenu(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
     initGameMenu(main);
 
     s32 offset = mainMenuOffset(main);
-    studio_menu_init(main->menu, MainMenu + offset, COUNT_OF(MainMenu) - offset, 0, 0, studio_is_cart_loaded(main->studio) ? onResumeGame : NULL, main);
+    menu_init(main->menu, MainMenu + offset, COUNT_OF(MainMenu) - offset, 0, 0, main->deps.isCartLoaded(main->deps.host) ? onMenuBack : NULL, main);
 }
 
 static void showOptionsMenuPos(void* data, s32 pos)
@@ -528,11 +498,12 @@ static void showOptionsMenuPos(void* data, s32 pos)
     StudioMainMenu* main = data;
 
     s32 offset = mainMenuOffset(main);
-    studio_menu_init(main->menu, OptionMenu, COUNT_OF(OptionMenu), pos, MainMenu_Options - offset, onBackFromOptionsMenu, main);
+    menu_init(main->menu, OptionMenu, COUNT_OF(OptionMenu), pos, MainMenu_Options - offset, onBackFromOptionsMenu, main);
 }
 
 static void showOptionsMenu(void* data, s32 pos)
 {
+    (void)pos;
     showOptionsMenuPos(data, OptionsMenu_VolumeOption);
 }
 
@@ -541,15 +512,15 @@ static void resetGamepadMenu(void* data, s32 pos);
 static char MappingItems[TIC_BUTTONS][sizeof "RIGHT - RIGHT"];
 
 static const char* const ButtonLabels[] =
-{
-    "UP",
-    "DOWN",
-    "LEFT",
-    "RIGHT",
-    "A",
-    "B",
-    "X",
-    "Y",
+    {
+        "UP",
+        "DOWN",
+        "LEFT",
+        "RIGHT",
+        "A",
+        "B",
+        "X",
+        "Y",
 };
 
 enum
@@ -581,34 +552,116 @@ static void assignMapping(void* data, s32 pos)
     static char str[sizeof Fmt + STRLEN("RIGHT")];
 
     static const MenuItem AssignKeyMenu[] =
-    {
-        {"Please, press a key you want"},
-        {str},
-    };
+        {
+            {.label = "Please, press a key you want"},
+            {.label = str},
+        };
 
     sprintf(str, Fmt, ButtonLabels[main->gamepads.key]);
 
-    studio_menu_init(main->menu, AssignKeyMenu, COUNT_OF(AssignKeyMenu), 1, 0, NULL, main);
+    menu_init(main->menu, AssignKeyMenu, COUNT_OF(AssignKeyMenu), 1, 0, NULL, main);
 }
 
 static void initGamepadButtons(StudioMainMenu* menu)
 {
     static const char* const KeysList[] =
-    {
-        "...",
-        "A",    "B",    "C",    "D",    "E",    "F",    "G",    "H",
-        "I",    "J",    "K",    "L",    "M",    "N",    "O",    "P",
-        "Q",    "R",    "S",    "T",    "U",    "V",    "W",    "X",
-        "Y",    "Z",    "0",    "1",    "2",    "3",    "4",    "5",
-        "6",    "7",    "8",    "9",    "-",    "=",    "[",    "]",
-        "\\",   ";",    "'",    "`",    ",",    ".",    "/",    "SPCE",
-        "TAB",  "RET",  "BACKS","DEL",  "INS",  "PGUP", "PGDN", "HOME",
-        "END",  "UP",   "DOWN", "LEFT", "RIGHT","CAPS", "CTRL", "SHIFT",
-        "ALT",  "ESC",  "F1",   "F2",   "F3",   "F4",   "F5",   "F6",
-        "F7",   "F8",   "F9",   "F10",  "F11",  "F12",  "NP0",  "NP1",
-        "NP2",  "NP3",  "NP4",  "NP5",  "NP6",  "NP7",  "NP8",  "NP9",
-        "NP+",  "NP-",  "NP*",  "NP/",  "NPENT", "NP.",
-    };
+        {
+            "...",
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+            "Q",
+            "R",
+            "S",
+            "T",
+            "U",
+            "V",
+            "W",
+            "X",
+            "Y",
+            "Z",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "-",
+            "=",
+            "[",
+            "]",
+            "\\",
+            ";",
+            "'",
+            "`",
+            ",",
+            ".",
+            "/",
+            "SPCE",
+            "TAB",
+            "RET",
+            "BACKS",
+            "DEL",
+            "INS",
+            "PGUP",
+            "PGDN",
+            "HOME",
+            "END",
+            "UP",
+            "DOWN",
+            "LEFT",
+            "RIGHT",
+            "CAPS",
+            "CTRL",
+            "SHIFT",
+            "ALT",
+            "ESC",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "NP0",
+            "NP1",
+            "NP2",
+            "NP3",
+            "NP4",
+            "NP5",
+            "NP6",
+            "NP7",
+            "NP8",
+            "NP9",
+            "NP+",
+            "NP-",
+            "NP*",
+            "NP/",
+            "NPENT",
+            "NP.",
+        };
 
     for(s32 i = 0, index = menu->gamepads.index * TIC_BUTTONS; i != TIC_BUTTONS; ++i)
         sprintf(MappingItems[i], "%-5s - %-5s", ButtonLabels[i], KeysList[menu->gamepads.mapping.data[index++]]);
@@ -628,14 +681,15 @@ static void optionGamepadSet(void* data, s32 pos)
 }
 
 static MenuOption GamepadOption =
-{
-    OPTION_VALUES({"1", "2", "3", "4"}),
-    optionGamepadGet,
-    optionGamepadSet,
+    {
+        OPTION_VALUES({"1", "2", "3", "4"}),
+        optionGamepadGet,
+        optionGamepadSet,
 };
 
 static void clearGamepadMenu(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
     ZEROMEM(main->gamepads.mapping);
     initGamepadMenu(main);
@@ -643,6 +697,7 @@ static void clearGamepadMenu(void* data, s32 pos)
 
 static void saveGamepadMenu(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
 
     main->options->mapping = main->gamepads.mapping;
@@ -652,37 +707,40 @@ static void saveGamepadMenu(void* data, s32 pos)
 static void initGamepadMenu(StudioMainMenu* main)
 {
     static const MenuItem GamepadMenu[] =
-    {
-        {"GAMEPAD", NULL, &GamepadOption},
-        {""},
+        {
+            {.label = "GAMEPAD", .option = &GamepadOption},
+            {.label = ""},
 
-        {MappingItems[0], assignMapping},
-        {MappingItems[1], assignMapping},
-        {MappingItems[2], assignMapping},
-        {MappingItems[3], assignMapping},
-        {MappingItems[4], assignMapping},
-        {MappingItems[5], assignMapping},
-        {MappingItems[6], assignMapping},
-        {MappingItems[7], assignMapping},
+            {.label = MappingItems[0], .handler = assignMapping},
+            {.label = MappingItems[1], .handler = assignMapping},
+            {.label = MappingItems[2], .handler = assignMapping},
+            {.label = MappingItems[3], .handler = assignMapping},
+            {.label = MappingItems[4], .handler = assignMapping},
+            {.label = MappingItems[5], .handler = assignMapping},
+            {.label = MappingItems[6], .handler = assignMapping},
+            {.label = MappingItems[7], .handler = assignMapping},
 
-        {""},
-        {"SAVE MAPPING",        saveGamepadMenu},
-        {"CLEAR MAPPING",       clearGamepadMenu},
-        {"RESET TO DEFAULTS",   resetGamepadMenu},
-        {"BACK",                showOptionsMenu, .back = true},
-    };
+            {.label = ""},
+            {.label = "SAVE MAPPING", .handler = saveGamepadMenu},
+            {.label = "CLEAR MAPPING", .handler = clearGamepadMenu},
+            {.label = "RESET TO DEFAULTS", .handler = resetGamepadMenu},
+            {.label = "BACK", .handler = showOptionsMenu, .back = true},
+        };
+
+    static_assert(COUNT_OF(GamepadMenu) == GamepadMenu_Back + 1, "GamepadMenuCount");
 
     initGamepadButtons(main);
 
-    studio_menu_init(main->menu, GamepadMenu, COUNT_OF(GamepadMenu),
-        main->gamepads.key < 0 ? GamepadMenu_Gamepad0 : main->gamepads.key + GamepadMenu_Gamepad0,
-        OptionsMenu_Gamepad, showOptionsMenu, main);
+    menu_init(main->menu, GamepadMenu, COUNT_OF(GamepadMenu),
+              main->gamepads.key < 0 ? GamepadMenu_Gamepad0 : main->gamepads.key + GamepadMenu_Gamepad0,
+              OptionsMenu_Gamepad, showOptionsMenu, main);
 
     main->gamepads.key = -1;
 }
 
 static void resetGamepadMenu(void* data, s32 pos)
 {
+    (void)pos;
     StudioMainMenu* main = data;
     main->gamepads.index = 0;
     ZEROMEM(main->gamepads.mapping);

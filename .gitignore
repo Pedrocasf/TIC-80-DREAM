@@ -7,6 +7,7 @@ compile_flags.txt
 sexit
 .vscode/
 build/install_manifest.txt
+build/runtime_versions.h
 build/vendor/
 build/uwp/tic/Debug/
 build/uwp/tic/Release/
@@ -17,6 +18,7 @@ build/uwp/tic/BundleArtifacts/
 build/android/gen/
 build/android/libs/
 build/android/obj/
+build/android-sokol/*.apk
 build/itch.io/tic.js
 build/itch.io/console.zip
 build/uwp/code8/ARM/
@@ -139,6 +141,7 @@ Makefile
 !build/baremetalpi/boot/Makefile
 !build/baremetalpi/toolchain.cmake
 !templates/c/Makefile
+!templates/go/Makefile
 build/android/.gradle/
 build/android/app/.externalNativeBuild/
 build/android/app/build/
@@ -194,6 +197,9 @@ build/*.map
 # 3ds files
 *.3dsx
 *.smdh
+# local tooling, not part of the project
+.claude/
+openspec/
 # vita
 build/tic80
 build/*.velf

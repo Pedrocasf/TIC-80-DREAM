@@ -1,0 +1,2236 @@
+// MIT License
+
+// Copyright (c) 2017 Vadim Grigoruk @nesbox // grigoruk@gmail.com
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+#include "sprite.h"
+#include "api.h"
+#include "studio/clipboard.h"
+#include "studio/icons.h"
+#include "studio/layout.h"
+#include "studio/ram.h"
+#include "studio/ui.h"
+#include "ext/history.h"
+
+#include <ctype.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define CANVAS_SIZE       (64)
+#define PALETTE_CELL_SIZE 8
+#define PALETTE_ROWS      2
+#define PALETTE_COLS      (TIC_PALETTE_SIZE / PALETTE_ROWS)
+#define PALETTE_WIDTH     (PALETTE_COLS * PALETTE_CELL_SIZE)
+#define PALETTE_HEIGHT    (PALETTE_ROWS * PALETTE_CELL_SIZE)
+#define BRUSH_SIZES       4
+
+enum
+{
+    BarH = STUDIO_BAR_HEIGHT,
+    CanvasX = 24,
+    CanvasY = 20,
+    CanvasW = CANVAS_SIZE,
+    CanvasH = CANVAS_SIZE,
+    PaletteX = 24,
+    PaletteY = 112,
+    PaletteW = PALETTE_WIDTH,
+    PaletteH = PALETTE_HEIGHT,
+    SheetX = TIC80_WIDTH - TIC_SPRITESHEET_SIZE - 1,
+    SheetY = BarH,
+};
+
+static bool keyPressed(Sprite* sprite, tic_key key)
+{
+    return keyboard_pressed(sprite->tic, key);
+}
+
+static char keyboardText(Sprite* sprite)
+{
+    return sprite->view->frame.captured ? '\0' : keyboard_text(sprite->tic);
+}
+
+static bool mousePos(Sprite* sprite, const tic_rect* rect)
+{
+    return !sprite->view->frame.pointerOwned && mouse_over(sprite->tic, rect);
+}
+
+static bool mouseClicked(Sprite* sprite, const tic_rect* rect, tic_mouse_btn button)
+{
+    return mouse_click(&sprite->deps.mouse[button], rect);
+}
+
+static bool mouseDown(Sprite* sprite, const tic_rect* rect, tic_mouse_btn button)
+{
+    return mouse_down(&sprite->deps.mouse[button], rect);
+}
+
+static tic_palette* bankPalette(Sprite* sprite, bool vbank1)
+{
+    return vbank1 ? sprite->view->vbank1 : sprite->view->vbank0;
+}
+
+static void tooltip(Sprite* sprite, const char* format, ...)
+{
+    char buf[STUDIO_TEXT_BUFFER_WIDTH];
+
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof buf, format, args);
+    va_end(args);
+
+    sprite->deps.tooltip(sprite->deps.host, buf);
+}
+
+// !TODO: move it to helpers place
+static void drawPanelBorder(tic_mem* tic, s32 x, s32 y, s32 w, s32 h)
+{
+    tic_api_rect(tic, x, y - 1, w, 1, tic_color_dark_grey);
+    tic_api_rect(tic, x - 1, y, 1, h, tic_color_dark_grey);
+    tic_api_rect(tic, x, y + h, w, 1, tic_color_light_grey);
+    tic_api_rect(tic, x + w, y, 1, h, tic_color_light_grey);
+}
+
+static void clearCanvasSelection(Sprite* sprite)
+{
+    memset(&sprite->select.rect, 0, sizeof(tic_rect));
+}
+
+static void initTileSheet(Sprite* sprite)
+{
+    sprite->blit.page %= sprite->blit.pages;
+    sprite->sheet = tic_tilesheet_get((u8)(tic_blit_calc_segment(&sprite->blit)), (u8*)sprite->src);
+}
+
+static void updateIndex(Sprite* sprite)
+{
+    sprite->index = (u16)(sprite->spritePos.y * (s32)sprite->blit.pages * TIC_SPRITESHEET_COLS + sprite->spritePos.x);
+    // index has changed, clear selection and the line start
+    clearCanvasSelection(sprite);
+    sprite->draw.lastPos.x = sprite->draw.lastPos.y = -1;
+}
+
+static inline bool isIdle(Sprite* sprite)
+{
+    return sprite->anim.movie == &sprite->anim.idle;
+}
+
+static void selectViewportPage(Sprite* sprite, u8 page)
+{
+    if(isIdle(sprite))
+    {
+        Anim* anim = sprite->anim.page.items;
+        anim->start = (page - sprite->blit.page) * TIC_SPRITESHEET_SIZE;
+        sprite->anim.movie = resetMovie(&sprite->anim.page);
+
+        sprite->blit.page = page;
+        updateIndex(sprite);
+        initTileSheet(sprite);
+    }
+}
+
+static void leftViewport(Sprite* sprite)
+{
+    s32 page = sprite->blit.page + sprite->blit.pages - 1;
+    selectViewportPage(sprite, page % sprite->blit.pages);
+}
+
+static void rightViewport(Sprite* sprite)
+{
+    s32 page = sprite->blit.page + sprite->blit.pages + 1;
+    selectViewportPage(sprite, page % sprite->blit.pages);
+}
+
+static s32 getIndexPosX(Sprite* sprite)
+{
+    return sprite->spritePos.x * TIC_SPRITESIZE;
+}
+
+static s32 getIndexPosY(Sprite* sprite)
+{
+    return sprite->spritePos.y * TIC_SPRITESIZE;
+}
+
+static void drawSelection(Sprite* sprite, s32 x, s32 y, s32 w, s32 h)
+{
+    tic_mem* tic = sprite->tic;
+
+    enum
+    {
+        Step = 3
+    };
+    u8 color = tic_color_white;
+
+    s32 index = sprite->tickCounter / 10;
+    for(s32 i = x; i < (x + w); i++)
+    {
+        tic_api_pix(tic, i, y, index++ % Step ? color : 0, false);
+    }
+    index++;
+    for(s32 i = y; i < (y + h); i++)
+    {
+        tic_api_pix(tic, x + w - 1, i, index++ % Step ? color : 0, false);
+    }
+    index++;
+    for(s32 i = (x + w - 1); i >= x; i--)
+    {
+        tic_api_pix(tic, i, y + h - 1, index++ % Step ? color : 0, false);
+    }
+    index++;
+    for(s32 i = (y + h - 1); i >= y; i--)
+    {
+        tic_api_pix(tic, x, i, index++ % Step ? color : 0, false);
+    }
+}
+
+static tic_rect getSpriteRect(Sprite* sprite)
+{
+    s32 x = getIndexPosX(sprite);
+    s32 y = getIndexPosY(sprite);
+
+    return (tic_rect){x, y, sprite->canvasSize, sprite->canvasSize};
+}
+
+static void drawCursorBorder(Sprite* sprite, s32 x, s32 y, s32 w, s32 h)
+{
+    tic_mem* tic = sprite->tic;
+
+    tic_api_rectb(tic, x, y, w, h, tic_color_black);
+    tic_api_rectb(tic, x - 1, y - 1, w + 2, h + 2, tic_color_white);
+}
+
+static void processPickerCanvasMouse(Sprite* sprite, s32 x, s32 y, s32 sx, s32 sy)
+{
+    tic_mem* tic = sprite->tic;
+    tic_rect rect = {x, y, CANVAS_SIZE, CANVAS_SIZE};
+    const s32 Size = CANVAS_SIZE / sprite->canvasSize;
+
+    if(mousePos(sprite, &rect))
+    {
+        ui_cursor(sprite->tic, tic_cursor_hand);
+
+        s32 mx = tic_api_mouse(tic).x - x;
+        s32 my = tic_api_mouse(tic).y - y;
+
+        mx -= mx % Size;
+        my -= my % Size;
+
+        drawCursorBorder(sprite, x + mx, y + my, Size, Size);
+
+        if(mouseDown(sprite, &rect, tic_mouse_left))
+            sprite->color = tic_tilesheet_getpix(&sprite->sheet, sx + mx / Size, sy + my / Size);
+
+        if(mouseDown(sprite, &rect, tic_mouse_right))
+            sprite->color2 = tic_tilesheet_getpix(&sprite->sheet, sx + mx / Size, sy + my / Size);
+    }
+}
+
+static void setSheetPixel(Sprite* sprite, s32 x, s32 y, u8 color)
+{
+    tic_tilesheet_setpix(&sprite->sheet, x, y, color);
+}
+
+static void paintBrush(Sprite* sprite, SpritePaintPixel paintPixel, u8 color, s32 x, s32 y)
+{
+    s32 pixels = sprite->brush.size;
+
+    for(s32 j = 0; j < pixels; j++)
+        for(s32 i = 0; i < pixels; i++)
+            paintPixel(sprite, x + i, y + j, color);
+}
+
+static void paintPoint(Sprite* sprite, SpritePaintPixel paintPixel, u8 color, s32 x, s32 y)
+{
+    paintBrush(sprite, paintPixel, color, x, y);
+
+    // mirror the brush across the centre of the canvas
+    tic_rect rect = getSpriteRect(sprite);
+    s32 hx = 2 * rect.x + rect.w - sprite->brush.size - x;
+    s32 vy = 2 * rect.y + rect.h - sprite->brush.size - y;
+
+    if(sprite->brush.symmetryHorizontal)
+        paintBrush(sprite, paintPixel, color, hx, y);
+
+    if(sprite->brush.symmetryVertical)
+        paintBrush(sprite, paintPixel, color, x, vy);
+
+    if(sprite->brush.symmetryHorizontal && sprite->brush.symmetryVertical)
+        paintBrush(sprite, paintPixel, color, hx, vy);
+}
+
+static void paintLine(Sprite* sprite, SpritePaintPixel paintPixel, u8 color, s32 x1, s32 y1, s32 x2, s32 y2)
+{
+    float dx = (float)(x2 - x1);
+    float dy = (float)(y2 - y1);
+
+    // If infinite slope, draw vertical line
+    if(dx == 0)
+    {
+        s32 step = y2 > y1 ? 1 : -1;
+        for(s32 ly = y1; y2 > y1 ? ly <= y2 : ly >= y2; ly += step)
+            paintPoint(sprite, paintPixel, color, x1, ly);
+    }
+    else
+    {
+        float slope = dy / dx;
+        float intercept = y1 - slope * x1;
+
+        // Draw for each point along whichever axis is longer
+        if(fabs(dx) >= fabs(dy))
+        {
+            s32 step = x2 > x1 ? 1 : -1;
+            for(s32 lx = x1; x2 > x1 ? lx <= x2 : lx >= x2; lx += step)
+                paintPoint(sprite, paintPixel, color, lx, (s32)(slope * lx + intercept));
+        }
+        else
+        {
+            s32 step = y2 > y1 ? 1 : -1;
+            for(s32 ly = y1; y2 > y1 ? ly <= y2 : ly >= y2; ly += step)
+                paintPoint(sprite, paintPixel, color, (s32)((ly - intercept) / slope), ly);
+        }
+    }
+}
+
+static s32 toCanvasCoord(s32 Size, s32 brushSize, s32 canvas_x, s32 x)
+{
+    s32 offset = (brushSize - Size) / 2;
+
+    x = (x - canvas_x) - offset;
+    x -= x % Size;
+
+    if(x < 0) x = 0;
+    if(x + brushSize >= CANVAS_SIZE) x = CANVAS_SIZE - brushSize;
+
+    return x;
+}
+
+// the stored line start, clamped so a brush that grew since then stays on the canvas
+static tic_point getLastDrawPos(Sprite* sprite)
+{
+    s32 max = sprite->canvasSize - sprite->brush.size;
+    tic_point pos = sprite->draw.lastPos;
+
+    return (tic_point){MIN(pos.x, max), MIN(pos.y, max)};
+}
+
+static inline bool hasLastDrawPos(Sprite* sprite)
+{
+    return sprite->draw.lastPos.x >= 0 && sprite->draw.lastPos.y >= 0;
+}
+
+static void processDrawCanvasMouse(Sprite* sprite, s32 x, s32 y, s32 sx, s32 sy)
+{
+    tic_mem* tic = sprite->tic;
+    tic_rect rect = {x, y, CANVAS_SIZE, CANVAS_SIZE};
+    const s32 Size = CANVAS_SIZE / sprite->canvasSize;
+
+    bool left = mouseDown(sprite, &rect, tic_mouse_left);
+    bool right = mouseDown(sprite, &rect, tic_mouse_right);
+
+    // end the stroke even if the button was released off the canvas
+    if(!left && !right)
+        sprite->draw.start = false;
+
+    bool drawing = false;
+
+    if(mousePos(sprite, &rect))
+    {
+        ui_cursor(sprite->tic, tic_cursor_hand);
+
+        s32 brushSize = sprite->brush.size * Size;
+        tic_point mouse = tic_api_mouse(tic);
+
+        s32 mx = toCanvasCoord(Size, brushSize, x, mouse.x);
+        s32 my = toCanvasCoord(Size, brushSize, y, mouse.y);
+
+        tooltip(sprite, "[x=%02i y=%02i]", mx / Size, my / Size);
+
+        drawCursorBorder(sprite, x + mx, y + my, brushSize, brushSize);
+
+        // mirrored brush positions
+        s32 hx = CANVAS_SIZE - brushSize - mx;
+        s32 vy = CANVAS_SIZE - brushSize - my;
+
+        if(sprite->brush.symmetryHorizontal)
+            drawCursorBorder(sprite, x + hx, y + my, brushSize, brushSize);
+
+        if(sprite->brush.symmetryVertical)
+            drawCursorBorder(sprite, x + mx, y + vy, brushSize, brushSize);
+
+        if(sprite->brush.symmetryHorizontal && sprite->brush.symmetryVertical)
+            drawCursorBorder(sprite, x + hx, y + vy, brushSize, brushSize);
+
+        if(left || right)
+        {
+            drawing = true;
+
+            tic_point pos = {mx / Size, my / Size};
+            tic_point from = pos;
+
+            // continue the stroke, or start a line from the last stroke when shift is held
+            if(sprite->draw.start || (tic_api_key(tic, tic_key_shift) && hasLastDrawPos(sprite)))
+                from = getLastDrawPos(sprite);
+
+            sprite->draw.start = true;
+
+            u8 color = left ? sprite->color : sprite->color2;
+            paintLine(sprite, setSheetPixel, color, sx + from.x, sy + from.y, sx + pos.x, sy + pos.y);
+
+            sprite->needsHistoryUpdate = true;
+
+            sprite->draw.lastPos = pos;
+        }
+    }
+
+    if(!drawing && sprite->needsHistoryUpdate)
+    {
+        history_add(sprite->history);
+        sprite->needsHistoryUpdate = false;
+    }
+}
+
+static void pasteSelection(Sprite* sprite)
+{
+    s32 l = getIndexPosX(sprite);
+    s32 t = getIndexPosY(sprite);
+    s32 r = l + sprite->canvasSize;
+    s32 b = t + sprite->canvasSize;
+
+    for(s32 sy = t, i = 0; sy < b; sy++)
+        for(s32 sx = l; sx < r; sx++)
+            tic_tilesheet_setpix(&sprite->sheet, sx, sy, sprite->select.back[i++]);
+
+    tic_rect* rect = &sprite->select.rect;
+
+    l += rect->x;
+    t += rect->y;
+    r = l + rect->w;
+    b = t + rect->h;
+
+    for(s32 sy = t, i = 0; sy < b; sy++)
+        for(s32 sx = l; sx < r; sx++)
+            tic_tilesheet_setpix(&sprite->sheet, sx, sy, sprite->select.front[i++]);
+
+    history_add(sprite->history);
+}
+
+static void copySelection(Sprite* sprite)
+{
+    tic_rect rect = getSpriteRect(sprite);
+    s32 r = rect.x + rect.w;
+    s32 b = rect.y + rect.h;
+
+    for(s32 sy = rect.y, i = 0; sy < b; sy++)
+        for(s32 sx = rect.x; sx < r; sx++)
+            sprite->select.back[i++] = tic_tilesheet_getpix(&sprite->sheet, sx, sy);
+
+    {
+        tic_rect* selRect = &sprite->select.rect;
+        memset(sprite->select.front, 0, CANVAS_SIZE * CANVAS_SIZE);
+
+        for(s32 j = selRect->y, index = 0; j < (selRect->y + selRect->h); j++)
+            for(s32 i = selRect->x; i < (selRect->x + selRect->w); i++)
+            {
+                u8* color = &sprite->select.back[i + j * sprite->canvasSize];
+                sprite->select.front[index++] = *color;
+                *color = sprite->color2;
+            }
+    }
+}
+
+static void processSelectCanvasMouse(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+
+    tic_rect rect = {x, y, CANVAS_SIZE, CANVAS_SIZE};
+    const s32 Size = CANVAS_SIZE / sprite->canvasSize;
+
+    bool endDrag = false;
+
+    if(mousePos(sprite, &rect))
+    {
+        ui_cursor(sprite->tic, tic_cursor_hand);
+
+        s32 mx = tic_api_mouse(tic).x - x;
+        s32 my = tic_api_mouse(tic).y - y;
+
+        mx -= mx % Size;
+        my -= my % Size;
+
+        drawCursorBorder(sprite, x + mx, y + my, Size, Size);
+
+        if(mouseDown(sprite, &rect, tic_mouse_left))
+        {
+            if(sprite->select.drag)
+            {
+                s32 tx = mx / Size;
+                s32 ty = my / Size;
+
+                s32 rl = MIN(tx, sprite->select.start.x);
+                s32 rt = MIN(ty, sprite->select.start.y);
+                s32 rr = MAX(tx, sprite->select.start.x);
+                s32 rb = MAX(ty, sprite->select.start.y);
+
+                sprite->select.rect = (tic_rect){rl, rt, rr - rl + 1, rb - rt + 1};
+            }
+            else
+            {
+                sprite->select.drag = true;
+                sprite->select.start = (tic_point){mx / Size, my / Size};
+                sprite->select.rect = (tic_rect){sprite->select.start.x, sprite->select.start.y, 1, 1};
+            }
+        }
+        else
+            endDrag = sprite->select.drag;
+    }
+    else
+        endDrag = !tic->ram->input.mouse.left && sprite->select.drag;
+
+    if(endDrag)
+    {
+        copySelection(sprite);
+        sprite->select.drag = false;
+    }
+}
+
+static void floodFill(Sprite* sprite, s32 l, s32 t, s32 r, s32 b, s32 x, s32 y, u8 color, u8 fill)
+{
+    if(tic_tilesheet_getpix(&sprite->sheet, x, y) == color)
+    {
+        tic_tilesheet_setpix(&sprite->sheet, x, y, fill);
+
+        if(x > l) floodFill(sprite, l, t, r, b, x - 1, y, color, fill);
+        if(x < r) floodFill(sprite, l, t, r, b, x + 1, y, color, fill);
+        if(y > t) floodFill(sprite, l, t, r, b, x, y - 1, color, fill);
+        if(y < b) floodFill(sprite, l, t, r, b, x, y + 1, color, fill);
+    }
+}
+
+static void replaceColor(Sprite* sprite, s32 l, s32 t, s32 r, s32 b, s32 x, s32 y, u8 color, u8 fill)
+{
+    (void)x;
+    (void)y;
+    for(s32 sy = t; sy <= b; sy++)
+        for(s32 sx = l; sx <= r; sx++)
+            if(tic_tilesheet_getpix(&sprite->sheet, sx, sy) == color)
+                tic_tilesheet_setpix(&sprite->sheet, sx, sy, fill);
+}
+
+static void processFillCanvasMouse(Sprite* sprite, s32 x, s32 y, s32 l, s32 t)
+{
+    tic_mem* tic = sprite->tic;
+    tic_rect rect = {x, y, CANVAS_SIZE, CANVAS_SIZE};
+    const s32 Size = CANVAS_SIZE / sprite->canvasSize;
+
+    if(mousePos(sprite, &rect))
+    {
+        ui_cursor(sprite->tic, tic_cursor_hand);
+
+        s32 mx = tic_api_mouse(tic).x - x;
+        s32 my = tic_api_mouse(tic).y - y;
+
+        mx -= mx % Size;
+        my -= my % Size;
+
+        drawCursorBorder(sprite, x + mx, y + my, Size, Size);
+
+        bool left = mouseClicked(sprite, &rect, tic_mouse_left);
+        bool right = mouseClicked(sprite, &rect, tic_mouse_right);
+
+        if(left || right)
+        {
+            s32 sx = l + mx / Size;
+            s32 sy = t + my / Size;
+
+            u8 color = tic_tilesheet_getpix(&sprite->sheet, sx, sy);
+            u8 fill = left ? sprite->color : sprite->color2;
+
+            if(color != fill)
+            {
+                tic_api_key(tic, tic_key_ctrl)
+                    ? replaceColor(sprite, l, t, l + sprite->canvasSize - 1, t + sprite->canvasSize - 1, sx, sy, color, fill)
+                    : floodFill(sprite, l, t, l + sprite->canvasSize - 1, t + sprite->canvasSize - 1, sx, sy, color, fill);
+            }
+
+            history_add(sprite->history);
+        }
+    }
+}
+
+static bool hasCanvasSelection(Sprite* sprite)
+{
+    return sprite->mode == SPRITE_SELECT_MODE && sprite->select.rect.w && sprite->select.rect.h;
+}
+
+static void drawCanvasVBank1(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+
+    const s32 Size = CANVAS_SIZE / sprite->canvasSize;
+    const tic_rect rect = getSpriteRect(sprite);
+
+    const tic_rect canvasRect = {x, y, CANVAS_SIZE, CANVAS_SIZE};
+    if(mouseDown(sprite, &canvasRect, tic_mouse_middle))
+    {
+        s32 mx = tic_api_mouse(tic).x - x;
+        s32 my = tic_api_mouse(tic).y - y;
+        sprite->color = tic_tilesheet_getpix(&sprite->sheet, rect.x + mx / Size, rect.y + my / Size);
+    }
+
+    drawPanelBorder(tic, canvasRect.x - 1, canvasRect.y - 1, canvasRect.w + 2, canvasRect.h + 2);
+    tic_api_rectb(tic, canvasRect.x - 1, canvasRect.y - 1, canvasRect.w + 2, canvasRect.h + 2, tic_color_black);
+
+    if(!sprite->palette.edit)
+    {
+        switch(sprite->mode)
+        {
+            case SPRITE_DRAW_MODE:
+                processDrawCanvasMouse(sprite, x, y, rect.x, rect.y);
+                break;
+            case SPRITE_PICK_MODE: processPickerCanvasMouse(sprite, x, y, rect.x, rect.y); break;
+            case SPRITE_SELECT_MODE: processSelectCanvasMouse(sprite, x, y); break;
+            case SPRITE_FILL_MODE: processFillCanvasMouse(sprite, x, y, rect.x, rect.y); break;
+        }
+    }
+
+    if(hasCanvasSelection(sprite))
+        drawSelection(sprite, x + sprite->select.rect.x * Size - 1, y + sprite->select.rect.y * Size - 1,
+                      sprite->select.rect.w * Size + 2, sprite->select.rect.h * Size + 2);
+    else
+    {
+        char buf[sizeof "#9999"];
+        s32 index = sprite->index + tic_blit_calc_index(&sprite->blit);
+        sprintf(buf, sprite->hexindex ? "0x%02X" : "#%i", index);
+
+        s32 w = (s32)(CANVAS_SIZE - strlen(buf) * TIC_FONT_WIDTH);
+        const tic_rect hexRect = {x + w / 2, TIC_SPRITESIZE + 2, w, TIC_FONT_HEIGHT};
+
+        if(mousePos(sprite, &hexRect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+
+            if(mouseClicked(sprite, &hexRect, tic_mouse_left))
+            {
+                sprite->hexindex = !sprite->hexindex;
+            }
+        }
+
+        tic_api_print(tic, buf, hexRect.x, hexRect.y + 1, tic_color_black, true, 1, false);
+        tic_api_print(tic, buf, hexRect.x, hexRect.y, tic_color_white, true, 1, false);
+    }
+}
+
+static void drawPreviewPixel(Sprite* sprite, s32 x, s32 y, u8 color)
+{
+    tic_mem* tic = sprite->tic;
+    const s32 Size = CANVAS_SIZE / sprite->canvasSize;
+    tic_rect rect = getSpriteRect(sprite);
+
+    // x, y are sheet coordinates, convert them to the canvas cell on screen
+    s32 cx = x - rect.x;
+    s32 cy = y - rect.y;
+
+    if(cx < 0 || cy < 0 || cx >= rect.w || cy >= rect.h)
+        return;
+
+    tic_api_rect(tic, CanvasX + cx * Size, CanvasY + cy * Size, Size, Size, color);
+}
+
+static void drawCanvas(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+    const s32 Size = CANVAS_SIZE / sprite->canvasSize;
+
+    tic_rect canvasRect = {x, y, CANVAS_SIZE, CANVAS_SIZE};
+    tic_rect spriteRect = getSpriteRect(sprite);
+    s32 r = spriteRect.x + spriteRect.w;
+    s32 b = spriteRect.y + spriteRect.h;
+
+    for(s32 sy = spriteRect.y, j = y; sy < b; sy++, j += Size)
+        for(s32 sx = spriteRect.x, i = x; sx < r; sx++, i += Size)
+            tic_api_rect(tic, i, j, Size, Size, tic_tilesheet_getpix(&sprite->sheet, sx, sy));
+
+    // preview the shift-click line, only where processDrawCanvasMouse would draw it
+    if(sprite->mode == SPRITE_DRAW_MODE && !sprite->palette.edit && mousePos(sprite, &canvasRect))
+    {
+        bool left = mouseDown(sprite, &canvasRect, tic_mouse_left);
+        bool right = mouseDown(sprite, &canvasRect, tic_mouse_right);
+        if(!left && !right && tic_api_key(tic, tic_key_shift) && hasLastDrawPos(sprite))
+        {
+            // convert the mouse to a brush cell the same way processDrawCanvasMouse does
+            s32 brushSize = sprite->brush.size * Size;
+            tic_point mouse = tic_api_mouse(tic);
+            s32 mx = toCanvasCoord(Size, brushSize, x, mouse.x);
+            s32 my = toCanvasCoord(Size, brushSize, y, mouse.y);
+            tic_point from = getLastDrawPos(sprite);
+
+            paintLine(sprite, drawPreviewPixel, sprite->color,
+                      spriteRect.x + from.x,
+                      spriteRect.y + from.y,
+                      spriteRect.x + mx / Size,
+                      spriteRect.y + my / Size);
+        }
+    }
+}
+
+static void upCanvas(Sprite* sprite)
+{
+    tic_rect* rect = &sprite->select.rect;
+    if(rect->y > 0) rect->y--;
+    pasteSelection(sprite);
+}
+
+static void downCanvas(Sprite* sprite)
+{
+    tic_rect* rect = &sprite->select.rect;
+    if(rect->y + rect->h < sprite->canvasSize) rect->y++;
+    pasteSelection(sprite);
+}
+
+static void leftCanvas(Sprite* sprite)
+{
+    tic_rect* rect = &sprite->select.rect;
+    if(rect->x > 0) rect->x--;
+    pasteSelection(sprite);
+}
+
+static void rightCanvas(Sprite* sprite)
+{
+    tic_rect* rect = &sprite->select.rect;
+    if(rect->x + rect->w < sprite->canvasSize) rect->x++;
+    pasteSelection(sprite);
+}
+
+static void rotateSelectRect(Sprite* sprite)
+{
+    tic_rect rect = sprite->select.rect;
+
+    s32 selection_center_x = rect.x + rect.w / 2;
+    s32 selection_center_y = rect.y + rect.h / 2;
+
+    // Rotate
+    sprite->select.rect.w = rect.h;
+    sprite->select.rect.h = rect.w;
+
+    // Make the new center be at the position of the previous center
+    sprite->select.rect.x -= (sprite->select.rect.x + sprite->select.rect.w / 2) - selection_center_x;
+    sprite->select.rect.y -= (sprite->select.rect.y + sprite->select.rect.h / 2) - selection_center_y;
+
+    // Check if we are not out of boundaries
+    if(sprite->select.rect.x < 0) sprite->select.rect.x = 0;
+    if(sprite->select.rect.y < 0) sprite->select.rect.y = 0;
+
+    if(sprite->select.rect.x + sprite->select.rect.w >= sprite->canvasSize)
+    {
+        sprite->select.rect.x -= sprite->select.rect.x + sprite->select.rect.w - sprite->canvasSize;
+    }
+
+    if(sprite->select.rect.y + sprite->select.rect.h >= sprite->canvasSize)
+    {
+        sprite->select.rect.y -= sprite->select.rect.y + sprite->select.rect.h - sprite->canvasSize;
+    }
+}
+
+static void rotateCanvas(Sprite* sprite)
+{
+    // zeroed: the loop below is written back out of it whole
+    u8* buffer = (u8*)calloc(1, CANVAS_SIZE * CANVAS_SIZE);
+
+    if(buffer)
+    {
+        {
+            tic_rect rect = sprite->select.rect;
+            const s32 Size = rect.h * rect.w;
+            s32 diff = 0;
+
+            for(s32 y = 0, i = 0; y < rect.w; y++)
+                for(s32 x = 0; x < rect.h; x++)
+                {
+                    diff = rect.w * (x + 1) - y;
+                    buffer[i++] = sprite->select.front[Size - diff];
+                }
+
+            for(s32 i = 0; i < Size; i++)
+                sprite->select.front[i] = buffer[i];
+
+            rotateSelectRect(sprite);
+            pasteSelection(sprite);
+            history_add(sprite->history);
+        }
+
+        free(buffer);
+    }
+}
+
+static void deleteCanvas(Sprite* sprite)
+{
+    tic_rect* rect = &sprite->select.rect;
+
+    s32 left = getIndexPosX(sprite) + rect->x;
+    s32 top = getIndexPosY(sprite) + rect->y;
+    s32 right = left + rect->w;
+    s32 bottom = top + rect->h;
+
+    for(s32 pixel_y = top; pixel_y < bottom; pixel_y++)
+        for(s32 pixel_x = left; pixel_x < right; pixel_x++)
+            tic_tilesheet_setpix(&sprite->sheet, pixel_x, pixel_y, sprite->color2);
+
+    clearCanvasSelection(sprite);
+
+    history_add(sprite->history);
+}
+
+static void flipCanvasHorz(Sprite* sprite)
+{
+    tic_rect* rect = &sprite->select.rect;
+
+    s32 sprite_x = getIndexPosX(sprite);
+    s32 sprite_y = getIndexPosY(sprite);
+
+    s32 right = sprite_x + rect->x + rect->w / 2;
+    s32 bottom = sprite_y + rect->y + rect->h;
+
+    for(s32 y = sprite_y + rect->y; y < bottom; y++)
+        for(s32 x = sprite_x + rect->x, i = sprite_x + rect->x + rect->w - 1; x < right; x++, i--)
+        {
+            u8 color = tic_tilesheet_getpix(&sprite->sheet, x, y);
+            tic_tilesheet_setpix(&sprite->sheet, x, y, tic_tilesheet_getpix(&sprite->sheet, i, y));
+            tic_tilesheet_setpix(&sprite->sheet, i, y, color);
+        }
+
+    history_add(sprite->history);
+    copySelection(sprite);
+}
+
+static void flipCanvasVert(Sprite* sprite)
+{
+    tic_rect* rect = &sprite->select.rect;
+
+    s32 sprite_x = getIndexPosX(sprite);
+    s32 sprite_y = getIndexPosY(sprite);
+
+    s32 right = sprite_x + rect->x + rect->w;
+    s32 bottom = sprite_y + rect->y + rect->h / 2;
+
+    for(s32 y = sprite_y + rect->y, i = sprite_y + rect->y + rect->h - 1; y < bottom; y++, i--)
+        for(s32 x = sprite_x + rect->x; x < right; x++)
+        {
+            u8 color = tic_tilesheet_getpix(&sprite->sheet, x, y);
+            tic_tilesheet_setpix(&sprite->sheet, x, y, tic_tilesheet_getpix(&sprite->sheet, x, i));
+            tic_tilesheet_setpix(&sprite->sheet, x, i, color);
+        }
+
+    history_add(sprite->history);
+    copySelection(sprite);
+}
+
+static s32* getSpriteIndexes(Sprite* sprite)
+{
+    static s32 indexes[TIC_SPRITESIZE * TIC_SPRITESIZE + 1];
+    memset(indexes, -1, sizeof indexes);
+
+    u16 sheet_cols = TIC_SPRITESHEET_COLS * sprite->blit.pages;
+
+    {
+        tic_rect r = {sprite->index % sheet_cols, sprite->index / sheet_cols, sprite->canvasSize / TIC_SPRITESIZE, sprite->canvasSize / TIC_SPRITESIZE};
+
+        s32 c = 0;
+        for(s32 j = r.y; j < r.h + r.y; j++)
+            for(s32 i = r.x; i < r.w + r.x; i++)
+                indexes[c++] = (i + j * sheet_cols) + sprite->blit.bank * TIC_BANK_SPRITES;
+    }
+
+    return indexes;
+}
+
+static void drawFlags(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+
+    if(hasCanvasSelection(sprite)) return;
+
+    enum
+    {
+        Size = 5
+    };
+
+    u8* flags = sprite->view->flags->data;
+    u8 or = 0;
+    u8 and = 0xff;
+
+    const s32* indexes = getSpriteIndexes(sprite);
+
+    {
+        const s32* i = indexes;
+        while(*i >= 0)
+        {
+            u8 mask = flags[*i++];
+            or |= mask;
+            and &= mask;
+        }
+    }
+
+    for(s32 i = 0; i < BITS_IN_BYTE; i++)
+    {
+        const u8 mask = 1 << i;
+        tic_rect rect = {x, y + (Size + 1) * i, Size, Size};
+
+        bool over = false;
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+            over = true;
+
+            tooltip(sprite, "set flag [%i]", i);
+
+            if(mouseClicked(sprite, &rect, tic_mouse_left))
+            {
+                const s32* idx = indexes;
+
+                if(or & mask)
+                    while(*idx >= 0)
+                        flags[*idx++] &= ~mask;
+                else
+                    while(*idx >= 0)
+                        flags[*idx++] |= mask;
+            }
+        }
+
+        tic_api_rect(tic, rect.x, rect.y, Size, Size, tic_color_black);
+
+        u8 flagColor = (u8)(i + 2);
+
+        if(or & mask)
+            tic_api_pix(tic, rect.x + 2, rect.y + 2, flagColor, false);
+        else if(over)
+            tic_api_rect(tic, rect.x + 1, rect.y + 1, Size - 2, Size - 2, flagColor);
+
+        if(and & mask)
+        {
+            tic_api_rect(tic, rect.x + 1, rect.y + 1, Size - 2, Size - 2, flagColor);
+            tic_api_pix(tic, rect.x + 3, rect.y + 1, tic_color_white, false);
+        }
+
+        tic_api_print(tic, (char[]){(char)('0' + i), '\0'}, rect.x + (Size + 2), rect.y, tic_color_light_grey, false, 1, true);
+    }
+
+    // draw flags editbox
+    {
+        tic_rect rect = {x, y + (Size + 1) * BITS_IN_BYTE + 2, TIC_ALTFONT_WIDTH * 2 + 1, TIC_FONT_HEIGHT + 1};
+
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+
+            sprite->deps.tooltip(sprite->deps.host, "flags hex value");
+
+            if(mouseClicked(sprite, &rect, tic_mouse_left))
+            {
+                sprite->flags.edit = true;
+                sprite->flags.pos = (tic_api_mouse(tic).x - rect.x) / (TIC_ALTFONT_WIDTH + 1);
+            }
+        }
+        else if(mouseDown(sprite, &(tic_rect){0, 0, TIC80_WIDTH, TIC80_HEIGHT}, tic_mouse_left))
+        {
+            sprite->flags.edit = false;
+        }
+
+        if(sprite->flags.edit)
+        {
+            drawPanelBorder(tic, rect.x, rect.y, rect.w, rect.h);
+            tic_api_rect(tic, rect.x, rect.y, rect.w, rect.h, tic_color_black);
+
+            tic_api_rect(tic, rect.x + sprite->flags.pos * TIC_ALTFONT_WIDTH, rect.y, TIC_ALTFONT_WIDTH + 1, rect.h, tic_color_red);
+        }
+
+        char buf[sizeof "FF"];
+        sprintf(buf, "%02X", and);
+
+        if(!sprite->flags.edit)
+            tic_api_print(tic, buf, rect.x + 1, rect.y + 2, tic_color_black, false, 1, true);
+
+        tic_api_print(tic, buf, rect.x + 1, rect.y + 1, tic_color_white, false, 1, true);
+    }
+}
+
+static void switchBitMode(Sprite* sprite, tic_bpp bpp)
+{
+    tic_blit_update_bpp(&sprite->blit, bpp);
+    updateIndex(sprite);
+    initTileSheet(sprite);
+
+    sprite->color %= 1 << sprite->blit.mode;
+    sprite->color2 %= 1 << sprite->blit.mode;
+
+    // Flags exist only in 4bpp.
+    if(sprite->blit.mode != tic_bpp_4)
+        sprite->flags.show = sprite->flags.edit = false;
+}
+
+static void drawMoveButtons(Sprite* sprite)
+{
+    if(hasCanvasSelection(sprite))
+    {
+        enum
+        {
+            x = 24
+        };
+        enum
+        {
+            y = 20
+        };
+
+        static const u8 Icons[] = {tic_icon_bigup, tic_icon_bigdown, tic_icon_bigleft, tic_icon_bigright};
+
+        static const tic_rect Rects[] =
+            {
+                {x + (CANVAS_SIZE - TIC_SPRITESIZE) / 2, y - TIC_SPRITESIZE, TIC_SPRITESIZE, TIC_SPRITESIZE / 2},
+                {x + (CANVAS_SIZE - TIC_SPRITESIZE) / 2, y + CANVAS_SIZE + TIC_SPRITESIZE / 2, TIC_SPRITESIZE, TIC_SPRITESIZE / 2},
+                {x - TIC_SPRITESIZE, y + (CANVAS_SIZE - TIC_SPRITESIZE) / 2, TIC_SPRITESIZE / 2, TIC_SPRITESIZE},
+                {x + CANVAS_SIZE + TIC_SPRITESIZE / 2, y + (CANVAS_SIZE - TIC_SPRITESIZE) / 2, TIC_SPRITESIZE / 2, TIC_SPRITESIZE},
+            };
+
+        static void (*const Func[])(Sprite*) = {upCanvas, downCanvas, leftCanvas, rightCanvas};
+
+        bool down = false;
+        for(s32 i = 0; i < COUNT_OF(Icons); i++)
+        {
+            down = false;
+
+            if(mousePos(sprite, &Rects[i]))
+            {
+                ui_cursor(sprite->tic, tic_cursor_hand);
+
+                if(mouseDown(sprite, &Rects[i], tic_mouse_left)) down = true;
+
+                if(mouseClicked(sprite, &Rects[i], tic_mouse_left))
+                    Func[i](sprite);
+            }
+
+            ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], Rects[i].x, Rects[i].y + 1, down ? tic_color_white : tic_color_black);
+
+            if(!down) ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], Rects[i].x, Rects[i].y, tic_color_white);
+        }
+    }
+}
+
+static void drawRGBSlider(Sprite* sprite, s32 x, s32 y, u8* value)
+{
+    tic_mem* tic = sprite->tic;
+
+    enum
+    {
+        Size = CANVAS_SIZE,
+        Max = 255
+    };
+
+    {
+        tic_rect rect = {x, y - 2, Size, 5};
+
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+
+            if(mouseDown(sprite, &rect, tic_mouse_left))
+            {
+                s32 mx = tic_api_mouse(tic).x - x;
+                *value = (u8)(mx * Max / (Size - 1));
+                sprite->palette.drag = true;
+            }
+        }
+
+        tic_api_rect(tic, x, y + 1, Size, 1, tic_color_black);
+        tic_api_rect(tic, x, y, Size, 1, tic_color_white);
+
+        {
+            s32 offset = x + *value * (Size - 1) / Max - 2;
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_pos, offset, y - 1, tic_color_black);
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_pos, offset, y - 2, tic_color_white);
+        }
+    }
+
+    {
+        tic_rect rect = {x - 4, y - 1, 2, 3};
+
+        bool down = false;
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+
+            if(mouseDown(sprite, &rect, tic_mouse_left))
+                down = true;
+
+            if(mouseClicked(sprite, &rect, tic_mouse_left))
+            {
+                (*value)--;
+                history_add(sprite->paletteHistory);
+            }
+        }
+
+        if(down)
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_tinyleft, rect.x - 1, rect.y, tic_color_white);
+        }
+        else
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_tinyleft, rect.x - 1, rect.y, tic_color_black);
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_tinyleft, rect.x - 1, rect.y - 1, tic_color_white);
+        }
+    }
+
+    {
+        tic_rect rect = {x + Size + 2, y - 1, 2, 3};
+
+        bool down = false;
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+
+            if(mouseDown(sprite, &rect, tic_mouse_left))
+                down = true;
+
+            if(mouseClicked(sprite, &rect, tic_mouse_left))
+            {
+                (*value)++;
+                history_add(sprite->paletteHistory);
+            }
+        }
+
+        if(down)
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_tinyright, rect.x - 1, rect.y, tic_color_white);
+        }
+        else
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_tinyright, rect.x - 1, rect.y, tic_color_black);
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_tinyright, rect.x - 1, rect.y - 1, tic_color_white);
+        }
+    }
+}
+
+static void copyPalette(Sprite* sprite)
+{
+    toClipboard(bankPalette(sprite, sprite->palette.vbank1)->data, sizeof(tic_palette), false);
+}
+
+static bool pasteColor(Sprite* sprite)
+{
+    bool ovr = sprite->palette.vbank1;
+    bool pasted = fromClipboard(&bankPalette(sprite, ovr)->colors[sprite->color], sizeof(tic_rgb), false, true, true) ||
+                  fromClipboard(bankPalette(sprite, ovr)->data, sizeof(tic_palette), false, true, true);
+
+    if(pasted)
+        history_add(sprite->paletteHistory);
+
+    return pasted;
+}
+
+static void drawRGBSliders(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+
+    enum
+    {
+        Cols = BITS_IN_BYTE / TIC_PALETTE_BPP,
+        Rows = sizeof(tic_rgb),
+        Width = TIC_FONT_WIDTH + 1,
+        Height = TIC_FONT_HEIGHT + 1
+    };
+
+    u8* data = &bankPalette(sprite, sprite->palette.vbank1)->data[sprite->color * Rows];
+
+    {
+        tic_rect rect = {x - 20, y - 3, TIC_FONT_WIDTH * Cols + 1, TIC_FONT_HEIGHT * Rows + 1};
+
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+
+            if(mouseDown(sprite, &rect, tic_mouse_left))
+            {
+                s32 mx = tic_api_mouse(tic).x - rect.x;
+                s32 my = tic_api_mouse(tic).y - rect.y;
+
+                sprite->palette.focus = mx / Width + my / Height * Cols;
+            }
+        }
+        else if(mouseDown(sprite, &(tic_rect){0, 0, TIC80_WIDTH, TIC80_HEIGHT}, tic_mouse_left))
+        {
+            sprite->palette.focus = -1;
+        }
+
+        bool hasFocus = sprite->palette.focus >= 0;
+        if(hasFocus)
+        {
+            drawPanelBorder(sprite->tic, rect.x, rect.y, rect.w, rect.h);
+            tic_api_rect(sprite->tic, rect.x, rect.y, rect.w, rect.h, tic_color_black);
+        }
+
+        for(s32 i = 0; i < Rows; i++)
+        {
+            char buf[sizeof "FF"];
+            sprintf(buf, "%02X", data[i]);
+            tic_api_print(tic, buf, rect.x + 1, rect.y + i * TIC_FONT_HEIGHT + 1,
+                          hasFocus ? tic_color_grey : tic_color_light_grey, true, 1, false);
+        }
+
+        if(hasFocus)
+        {
+            s32 col = sprite->palette.focus % Cols;
+            s32 row = sprite->palette.focus / Cols;
+            s32 px = rect.x + col * TIC_FONT_WIDTH;
+            s32 py = rect.y + row * TIC_FONT_HEIGHT;
+            tic_api_rect(sprite->tic, px, py, Width, Height, tic_color_red);
+
+            {
+                char buf[sizeof "FF"];
+                sprintf(buf, "%02X", data[row]);
+                tic_api_print(tic, (char[]){buf[col], '\0'}, px + 1, py + 1, tic_color_black, true, 1, false);
+            }
+        }
+    }
+
+    for(s32 i = 0; i < Rows; i++)
+        drawRGBSlider(sprite, x, y + TIC_FONT_HEIGHT * i, &data[i]);
+}
+
+static tic_palette_dimensions getPaletteDimensions(Sprite* sprite)
+{
+
+    tic_bpp bpp = sprite->blit.mode;
+
+    s32 cols = bpp == tic_bpp_4 ? PALETTE_COLS : bpp == tic_bpp_2 ? 4
+                                                                  : 2;
+    s32 rows = bpp == tic_bpp_4 ? PALETTE_ROWS : 1;
+
+    s32 cell_w = (PALETTE_COLS / cols) * PALETTE_CELL_SIZE;
+    s32 cell_h = (PALETTE_ROWS / rows) * PALETTE_CELL_SIZE;
+
+    return (tic_palette_dimensions){cell_w, cell_h, cols, rows, cols * rows};
+}
+
+static void drawPaletteVBank1(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+    tic_rect rect = {x, y, PALETTE_WIDTH - 1, PALETTE_HEIGHT - 1};
+    tic_palette_dimensions palette = getPaletteDimensions(sprite);
+
+    if(mousePos(sprite, &rect))
+    {
+        ui_cursor(sprite->tic, tic_cursor_hand);
+
+        s32 mx = tic_api_mouse(tic).x - x;
+        s32 my = tic_api_mouse(tic).y - y;
+
+        mx /= palette.cell_w;
+        my /= palette.cell_h;
+
+        s32 index = mx + my * palette.cols;
+
+        tooltip(sprite, "color [%02i]", index);
+
+        bool left = mouseDown(sprite, &rect, tic_mouse_left);
+        bool right = mouseDown(sprite, &rect, tic_mouse_right);
+
+        if(left || right)
+        {
+            if(left) sprite->color = (u8)(index);
+            if(right) sprite->color2 = (u8)(index);
+        }
+    }
+
+    enum
+    {
+        Gap = 1
+    };
+
+    drawPanelBorder(tic, x - Gap, y - Gap, PaletteW + Gap, PaletteH + Gap);
+
+    for(s32 row = 0; row < palette.rows; row++)
+        for(s32 col = 0; col < palette.cols; col++)
+        {
+            tic_api_rectb(tic, x + col * palette.cell_w - Gap, y + row * palette.cell_h - Gap,
+                          palette.cell_w + Gap, palette.cell_h + Gap, tic_color_black);
+        }
+
+    {
+        s32 offsetX = x + (sprite->color % PALETTE_COLS) * palette.cell_w;
+        s32 offsetY = y + (sprite->color / PALETTE_COLS) * palette.cell_h;
+        tic_api_rectb(tic, offsetX - 1, offsetY - 1, palette.cell_w + 1, palette.cell_h + 1, tic_color_white);
+    }
+
+    {
+        s32 offsetX = x + (sprite->color2 % PALETTE_COLS) * palette.cell_w;
+        s32 offsetY = y + (sprite->color2 / PALETTE_COLS) * palette.cell_h;
+
+        for(u8 i = 0; i < palette.cell_w + 1; i += 2)
+        {
+            tic_api_pix(tic, offsetX + i - 1, offsetY - 1, tic_color_white, false);
+            tic_api_pix(tic, offsetX + i - 1, offsetY + palette.cell_h - 1, tic_color_white, false);
+        }
+
+        for(u8 i = 0; i < palette.cell_h + 1; i += 2)
+        {
+            tic_api_pix(tic, offsetX - 1, offsetY + i - 1, tic_color_white, false);
+            tic_api_pix(tic, offsetX + palette.cell_w - 1, offsetY + i - 1, tic_color_white, false);
+        }
+    }
+}
+
+static void drawPalette(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+    tic_palette_dimensions palette = getPaletteDimensions(sprite);
+
+    for(s32 row = 0, i = 0; row < palette.rows; row++)
+        for(s32 col = 0; col < palette.cols; col++)
+            tic_api_rect(tic, x + col * palette.cell_w, y + row * palette.cell_h, palette.cell_w - 1, palette.cell_h - 1, (u8)(i++));
+}
+
+static void selectSprite(Sprite* sprite, s32 x, s32 y)
+{
+    {
+        s32 size = TIC_SPRITESHEET_SIZE - sprite->canvasSize;
+        if(x < 0) x = 0;
+        if(y < 0) y = 0;
+        if(x > size) x = size;
+        if(y > size) y = size;
+    }
+    sprite->spritePos.x = (u16)(x / TIC_SPRITESIZE);
+    sprite->spritePos.y = (u16)(y / TIC_SPRITESIZE);
+    updateIndex(sprite);
+}
+
+static void updateSpriteSize(Sprite* sprite, s32 size)
+{
+    if(size != sprite->canvasSize)
+    {
+        sprite->canvasSize = (u8)(size);
+        selectSprite(sprite, sprite->spritePos.x * TIC_SPRITESIZE, sprite->spritePos.y * TIC_SPRITESIZE);
+    }
+}
+
+static void drawSheetVBank1(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+
+    tic_rect rect = {x, y, TIC_SPRITESHEET_SIZE, TIC_SPRITESHEET_SIZE};
+
+    tic_api_rectb(tic, rect.x - 1, rect.y - 1, rect.w + 2, rect.h + 2, tic_color_white);
+
+    for(s32 i = 1; i < rect.h; i += 4)
+    {
+        if(sprite->blit.page > 0)
+        {
+            tic_api_pix(tic, rect.x - 1, rect.y + i, tic_color_black, false);
+            tic_api_pix(tic, rect.x - 1, rect.y + i + 1, tic_color_black, false);
+        }
+
+        if(sprite->blit.page < sprite->blit.pages - 1)
+        {
+            tic_api_pix(tic, rect.x + rect.w, rect.y + i, tic_color_black, false);
+            tic_api_pix(tic, rect.x + rect.w, rect.y + i + 1, tic_color_black, false);
+        }
+    }
+
+    if(mousePos(sprite, &rect))
+    {
+        ui_cursor(sprite->tic, tic_cursor_hand);
+
+        if(mouseDown(sprite, &rect, tic_mouse_left))
+        {
+            s32 offset = (sprite->canvasSize - TIC_SPRITESIZE) / 2;
+            selectSprite(sprite, tic_api_mouse(tic).x - x - offset, tic_api_mouse(tic).y - y - offset);
+        }
+    }
+
+    s32 bx = sprite->spritePos.x * TIC_SPRITESIZE + x - 1;
+    s32 by = sprite->spritePos.y * TIC_SPRITESIZE + y - 1;
+
+    tic_api_rectb(tic, bx, by, sprite->canvasSize + 2, sprite->canvasSize + 2, tic_color_white);
+}
+
+static void drawSheet(Sprite* sprite, s32 x, s32 y)
+{
+    tic_mem* tic = sprite->tic;
+    tiles2ram(tic->ram, sprite->src);
+
+    tic_blit blit = sprite->blit;
+    SCOPE(tic->ram->vram.blit.segment = TIC_DEFAULT_BLIT_MODE)
+    {
+        tic_point start =
+                      {
+                          x - blit.page * TIC_SPRITESHEET_SIZE + sprite->anim.pos.page,
+                          y - blit.bank * TIC_SPRITESHEET_SIZE + sprite->anim.pos.bank},
+                  pos = start;
+
+        for(blit.bank = 0; blit.bank < TIC_SPRITE_BANKS; ++blit.bank, pos.y += TIC_SPRITESHEET_SIZE, pos.x = start.x)
+        {
+            for(blit.page = 0; blit.page < blit.pages; ++blit.page, pos.x += TIC_SPRITESHEET_SIZE)
+            {
+                tic->ram->vram.blit.segment = (u8)(tic_blit_calc_segment(&blit));
+                tic_api_spr(tic, 0, pos.x, pos.y, TIC_SPRITESHEET_COLS, TIC_SPRITESHEET_COLS, NULL, 0, 1, tic_no_flip, tic_no_rotate);
+            }
+        }
+    }
+}
+
+static void flipSpriteHorz(Sprite* sprite)
+{
+    tic_rect rect = getSpriteRect(sprite);
+    s32 r = rect.x + rect.w / 2;
+    s32 b = rect.y + rect.h;
+
+    for(s32 y = rect.y; y < b; y++)
+        for(s32 x = rect.x, i = rect.x + rect.w - 1; x < r; x++, i--)
+        {
+            u8 color = tic_tilesheet_getpix(&sprite->sheet, x, y);
+            tic_tilesheet_setpix(&sprite->sheet, x, y, tic_tilesheet_getpix(&sprite->sheet, i, y));
+            tic_tilesheet_setpix(&sprite->sheet, i, y, color);
+        }
+
+    history_add(sprite->history);
+}
+
+static void flipSpriteVert(Sprite* sprite)
+{
+    tic_rect rect = getSpriteRect(sprite);
+    s32 r = rect.x + rect.w;
+    s32 b = rect.y + rect.h / 2;
+
+    for(s32 y = rect.y, i = rect.y + rect.h - 1; y < b; y++, i--)
+        for(s32 x = rect.x; x < r; x++)
+        {
+            u8 color = tic_tilesheet_getpix(&sprite->sheet, x, y);
+            tic_tilesheet_setpix(&sprite->sheet, x, y, tic_tilesheet_getpix(&sprite->sheet, x, i));
+            tic_tilesheet_setpix(&sprite->sheet, x, i, color);
+        }
+
+    history_add(sprite->history);
+}
+
+static void rotateSprite(Sprite* sprite)
+{
+    const s32 Size = sprite->canvasSize;
+    u8* buffer = (u8*)malloc(Size * Size);
+
+    if(buffer)
+    {
+        {
+            tic_rect rect = getSpriteRect(sprite);
+            s32 r = rect.x + rect.w;
+            s32 b = rect.y + rect.h;
+
+            for(s32 y = rect.y, i = 0; y < b; y++)
+                for(s32 x = rect.x; x < r; x++)
+                    buffer[i++] = tic_tilesheet_getpix(&sprite->sheet, x, y);
+
+            for(s32 y = rect.y, j = 0; y < b; y++, j++)
+                for(s32 x = rect.x, i = 0; x < r; x++, i++)
+                    tic_tilesheet_setpix(&sprite->sheet, x, y, buffer[j + (Size - i - 1) * Size]);
+
+            history_add(sprite->history);
+        }
+
+        free(buffer);
+    }
+}
+
+static inline bool is4bpp(Sprite* sprite)
+{
+    return sprite->blit.mode == 4;
+}
+
+static void deleteSprite(Sprite* sprite)
+{
+    tic_rect rect = getSpriteRect(sprite);
+    s32 r = rect.x + rect.w;
+    s32 b = rect.y + rect.h;
+
+    for(s32 y = rect.y; y < b; y++)
+        for(s32 x = rect.x; x < r; x++)
+            tic_tilesheet_setpix(&sprite->sheet, x, y, sprite->color2);
+
+    if(is4bpp(sprite))
+    {
+        u8* flags = sprite->view->flags->data;
+        for(const s32* it = getSpriteIndexes(sprite); *it >= 0; ++it)
+            flags[*it] = 0;
+    }
+
+    clearCanvasSelection(sprite);
+
+    history_add(sprite->history);
+}
+
+static void (*const SpriteToolsFunc[])(Sprite*) = {flipSpriteHorz, flipSpriteVert, rotateSprite, deleteSprite};
+static void (*const CanvasToolsFunc[])(Sprite*) = {flipCanvasHorz, flipCanvasVert, rotateCanvas, deleteCanvas};
+
+static void drawSpriteTools(Sprite* sprite, s32 x, s32 y)
+{
+    static const u8 Icons[] = {tic_icon_fliphorz, tic_icon_flipvert, tic_icon_rotate, tic_icon_erase};
+    static const char* Tooltips[] = {"FLIP HORZ [5]", "FLIP VERT [6]", "ROTATE [7]", "ERASE [8]"};
+
+    enum
+    {
+        Gap = TIC_SPRITESIZE + 3
+    };
+
+    for(s32 i = 0; i < COUNT_OF(Icons); i++)
+    {
+        bool pushed = false;
+        bool over = false;
+
+        tic_rect rect = {x + i * Gap, y, TIC_SPRITESIZE, TIC_SPRITESIZE};
+
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+
+            over = true;
+
+            sprite->deps.tooltip(sprite->deps.host, Tooltips[i]);
+
+            if(mouseDown(sprite, &rect, tic_mouse_left)) pushed = true;
+
+            if(mouseClicked(sprite, &rect, tic_mouse_left))
+            {
+                if(hasCanvasSelection(sprite))
+                {
+                    CanvasToolsFunc[i](sprite);
+                }
+                else
+                {
+                    SpriteToolsFunc[i](sprite);
+                    clearCanvasSelection(sprite);
+                }
+            }
+        }
+
+        if(pushed)
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], rect.x, y + 1, (over ? tic_color_light_grey : tic_color_white));
+        }
+        else
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], rect.x, y + 1, tic_color_black);
+            ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], rect.x, y, (over ? tic_color_light_grey : tic_color_white));
+        }
+    }
+}
+
+static void drawTools(Sprite* sprite, s32 x, s32 y)
+{
+    enum
+    {
+        Gap = TIC_SPRITESIZE + 3
+    };
+
+    static const u8 Icons[] = {tic_icon_bigpen, tic_icon_bigpicker, tic_icon_bigselect, tic_icon_bigfill};
+
+    for(s32 i = 0; i < COUNT_OF(Icons); i++)
+    {
+        tic_rect rect = {x + i * Gap, y, TIC_SPRITESIZE, TIC_SPRITESIZE};
+
+        bool over = false;
+        if(mousePos(sprite, &rect))
+        {
+            ui_cursor(sprite->tic, tic_cursor_hand);
+            over = true;
+
+            static const char* Tooltips[] = {"BRUSH [1]", "COLOR PICKER [2]", "SELECT [3]", "FILL [4]"};
+
+            sprite->deps.tooltip(sprite->deps.host, Tooltips[i]);
+
+            if(mouseClicked(sprite, &rect, tic_mouse_left))
+            {
+                sprite->mode = i;
+
+                clearCanvasSelection(sprite);
+            }
+        }
+
+        bool pushed = i == (s32)sprite->mode;
+
+        if(pushed)
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_down, rect.x, y - 5, tic_color_black);
+            ui_icon(sprite->tic, sprite->view->cartTiles, tic_icon_down, rect.x, y - 6, tic_color_white);
+
+            ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], rect.x, y + 1, (over ? tic_color_light_grey : tic_color_white));
+        }
+        else
+        {
+            ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], rect.x, y + 1, tic_color_black);
+            ui_icon(sprite->tic, sprite->view->cartTiles, Icons[i], rect.x, y, (over ? tic_color_light_grey : tic_color_white));
+        }
+    }
+
+    drawSpriteTools(sprite, x + COUNT_OF(Icons) * Gap + 1, y);
+}
+
+void spriteToolAction(Sprite* sprite, s32 tool)
+{
+    if(hasCanvasSelection(sprite))
+        CanvasToolsFunc[tool](sprite);
+    else
+    {
+        SpriteToolsFunc[tool](sprite);
+        clearCanvasSelection(sprite);
+    }
+}
+
+static inline s32 getClipboardSpritesSize(Sprite* sprite)
+{
+    return sprite->canvasSize * sprite->canvasSize * TIC_PALETTE_BPP / BITS_IN_BYTE;
+}
+
+static inline s32 getClipboardFlagsSize(Sprite* sprite)
+{
+    return is4bpp(sprite) ? sprite->canvasSize * sprite->canvasSize / (TIC_SPRITESIZE * TIC_SPRITESIZE) : 0;
+}
+
+static inline s32 getClipboardSize(Sprite* sprite)
+{
+    return getClipboardSpritesSize(sprite) + getClipboardFlagsSize(sprite);
+}
+
+static void copyToClipboard(Sprite* sprite)
+{
+    if(sprite->palette.edit)
+    {
+        copyPalette(sprite);
+        return;
+    }
+
+    s32 size = getClipboardSize(sprite);
+
+    // zeroed: the pokes below read the byte around the nibble they write, and
+    // an odd number of them leaves the last byte's other nibble as it was
+    u8* buffer = calloc(1, size);
+    SCOPE(free(buffer))
+    {
+        tic_rect rect = getSpriteRect(sprite);
+        s32 r = rect.x + rect.w;
+        s32 b = rect.y + rect.h;
+
+        for(s32 y = rect.y, i = 0; y < b; y++)
+            for(s32 x = rect.x; x < r; x++)
+                tic_tool_poke4(buffer, i++, tic_tilesheet_getpix(&sprite->sheet, x, y) & 0xf);
+
+        if(is4bpp(sprite))
+        {
+            u8* ptr = buffer + getClipboardSpritesSize(sprite);
+
+            const u8* flags = sprite->view->flags->data;
+            for(const s32* it = getSpriteIndexes(sprite); *it >= 0; ++it)
+                *ptr++ = flags[*it];
+        }
+
+        toClipboard(buffer, size, true);
+    }
+}
+
+static void cutToClipboard(Sprite* sprite)
+{
+    if(sprite->palette.edit)
+    {
+        copyPalette(sprite);
+        return;
+    }
+
+    copyToClipboard(sprite);
+    deleteSprite(sprite);
+}
+
+static void copyFromClipboard(Sprite* sprite)
+{
+    if(sprite->palette.edit)
+    {
+        pasteColor(sprite);
+        return;
+    }
+
+    s32 size = getClipboardSize(sprite);
+
+    u8* buffer = malloc(size);
+    SCOPE(free(buffer))
+    {
+        if(fromClipboard(buffer, size, true, false, true))
+        {
+            tic_rect rect = getSpriteRect(sprite);
+            s32 r = rect.x + rect.w;
+            s32 b = rect.y + rect.h;
+
+            for(s32 y = rect.y, i = 0; y < b; y++)
+                for(s32 x = rect.x; x < r; x++)
+                    tic_tilesheet_setpix(&sprite->sheet, x, y, tic_tool_peek4(buffer, i++));
+
+            if(is4bpp(sprite))
+            {
+                const u8* ptr = buffer + getClipboardSpritesSize(sprite);
+                u8* flags = sprite->view->flags->data;
+
+                for(const s32* it = getSpriteIndexes(sprite); *it >= 0; ++it)
+                    flags[*it] = *ptr++;
+            }
+
+            history_add(sprite->history);
+        }
+    }
+}
+
+static void upSprite(Sprite* sprite)
+{
+    if(sprite->spritePos.y > 0) sprite->spritePos.y--;
+    updateIndex(sprite);
+}
+
+static void downSprite(Sprite* sprite)
+{
+    if((sprite->spritePos.y + sprite->canvasSize / TIC_SPRITESIZE) < TIC_SPRITESHEET_COLS) sprite->spritePos.y++;
+    updateIndex(sprite);
+}
+
+static void leftSprite(Sprite* sprite)
+{
+    if(sprite->spritePos.x > 0) sprite->spritePos.x--;
+    updateIndex(sprite);
+}
+
+static void rightSprite(Sprite* sprite)
+{
+    if((sprite->spritePos.x + sprite->canvasSize / TIC_SPRITESIZE) < TIC_SPRITESHEET_COLS) sprite->spritePos.x++;
+    updateIndex(sprite);
+}
+
+static void undo(Sprite* sprite)
+{
+    history_undo(sprite->palette.edit ? sprite->paletteHistory : sprite->history);
+}
+
+static void redo(Sprite* sprite)
+{
+    history_redo(sprite->palette.edit ? sprite->paletteHistory : sprite->history);
+}
+
+static void switchBanks(Sprite* sprite)
+{
+    if(isIdle(sprite))
+    {
+        s32 bank = (sprite->blit.bank + 1) % TIC_SPRITE_BANKS;
+        Anim* anim = sprite->anim.bank.items;
+        anim->start = (bank - sprite->blit.bank) * TIC_SPRITESHEET_SIZE;
+        sprite->anim.movie = resetMovie(&sprite->anim.bank);
+
+        sprite->blit.bank = (u8)(bank);
+
+        updateIndex(sprite);
+        initTileSheet(sprite);
+    }
+}
+
+void spriteSelectBank(Sprite* sprite, s32 bank)
+{
+    if((s32)sprite->blit.bank != bank)
+        switchBanks(sprite);
+}
+
+void spriteSelectPage(Sprite* sprite, s32 page)
+{
+    if(page >= 0 && page < sprite->blit.pages)
+        selectViewportPage(sprite, (u8)page);
+}
+
+void spriteSetBpp(Sprite* sprite, tic_bpp bpp)
+{
+    switchBitMode(sprite, bpp);
+}
+
+void spriteSetSize(Sprite* sprite, s32 size)
+{
+    updateSpriteSize(sprite, size);
+}
+
+void spriteSetBrushSize(Sprite* sprite, s32 size)
+{
+    sprite->brush.size = (u8)CLAMP(size, 1, BRUSH_SIZES);
+}
+
+void spritePaletteChanged(Sprite* sprite)
+{
+    history_add(sprite->paletteHistory);
+}
+
+void spriteSetMode(Sprite* sprite, s32 mode)
+{
+    sprite->mode = mode;
+    clearCanvasSelection(sprite);
+}
+
+static void updateBrushSize(Sprite* sprite, s32 val)
+{
+    sprite->brush.size = (sprite->brush.size + val + (BRUSH_SIZES - 1)) % BRUSH_SIZES + 1;
+}
+
+static void updateColorIndex(Sprite* sprite, s32 val)
+{
+    s32 colors = 1 << sprite->blit.mode;
+    sprite->color = (u8)((sprite->color + val + colors) % colors);
+}
+
+static void processKeyboard(Sprite* sprite)
+{
+    tic_mem* tic = sprite->tic;
+
+    switch(sprite->view->frame.clipboard)
+    {
+        case TIC_CLIPBOARD_CUT: cutToClipboard(sprite); break;
+        case TIC_CLIPBOARD_COPY: copyToClipboard(sprite); break;
+        case TIC_CLIPBOARD_PASTE: copyFromClipboard(sprite); break;
+        default: break;
+    }
+
+    if(tic_api_key(tic, tic_key_alt))
+        return;
+
+    // Undo/redo reach the palette history from the hex field as well.
+    if(tic_api_key(tic, tic_key_ctrl) && !sprite->flags.edit)
+    {
+        if(keyPressed(sprite, tic_key_z))
+            undo(sprite);
+        else if(keyPressed(sprite, tic_key_y))
+            redo(sprite);
+    }
+
+    if(sprite->palette.edit && sprite->palette.focus >= 0)
+    {
+        enum
+        {
+            Cols = BITS_IN_BYTE / TIC_PALETTE_BPP,
+            Rows = sizeof(tic_rgb)
+        };
+        s32 col = sprite->palette.focus % Cols;
+        s32 row = sprite->palette.focus / Cols;
+
+        if(keyPressed(sprite, tic_key_up))
+            --row;
+        else if(keyPressed(sprite, tic_key_down))
+            ++row;
+        else if(keyPressed(sprite, tic_key_left))
+            --col;
+        else if(keyPressed(sprite, tic_key_right))
+            ++col;
+        else
+        {
+            char sym = keyboardText(sprite);
+
+            if(isxdigit((u8)sym))
+            {
+                u8* data = &bankPalette(sprite, sprite->palette.vbank1)->data[sprite->color * Rows + row];
+                char buf[sizeof "FF"];
+                sprintf(buf, "%02X", *data);
+                buf[col] = (char)(toupper((u8)sym));
+                *data = (u8)strtol(buf, NULL, 16);
+                history_add(sprite->paletteHistory);
+                ++col;
+            }
+        }
+
+        sprite->palette.focus = (col + row * Cols + Cols * Rows) % (Cols * Rows);
+    }
+    else if(sprite->flags.edit)
+    {
+        if(keyPressed(sprite, tic_key_left))
+        {
+            if(sprite->flags.pos)
+                sprite->flags.pos--;
+        }
+        else if(keyPressed(sprite, tic_key_right))
+        {
+            if(!sprite->flags.pos)
+                sprite->flags.pos++;
+        }
+        else
+        {
+            char sym = keyboardText(sprite);
+
+            if(isxdigit((u8)sym))
+            {
+                u8 mask = 0xff;
+
+                u8* flags = sprite->view->flags->data;
+                const s32* indexes = getSpriteIndexes(sprite);
+
+                for(const s32* i = indexes; *i >= 0; i++)
+                    mask &= flags[*i];
+
+                char buf[sizeof "FF"];
+                sprintf(buf, "%02X", mask);
+                buf[sprite->flags.pos] = (char)(toupper((u8)sym));
+                u8 value = (u8)(strtol(buf, NULL, 16));
+
+                for(const s32* i = indexes; *i >= 0; i++)
+                    flags[*i] = value;
+
+                if(!sprite->flags.pos)
+                    sprite->flags.pos++;
+            }
+        }
+    }
+    else
+    {
+        bool ctrl = tic_api_key(tic, tic_key_ctrl);
+
+        if(ctrl)
+        {
+            if(keyPressed(sprite, tic_key_left))
+                leftViewport(sprite);
+            else if(keyPressed(sprite, tic_key_right))
+                rightViewport(sprite);
+
+            else if(keyPressed(sprite, tic_key_tab))
+                switchBitMode(sprite, sprite->blit.mode == tic_bpp_4
+                                          ? tic_bpp_2
+                                      : sprite->blit.mode == tic_bpp_2
+                                          ? tic_bpp_1
+                                          : tic_bpp_4);
+        }
+        else
+        {
+            if(hasCanvasSelection(sprite))
+            {
+                if(!sprite->select.drag)
+                {
+                    if(keyPressed(sprite, tic_key_up))
+                        upCanvas(sprite);
+                    else if(keyPressed(sprite, tic_key_down))
+                        downCanvas(sprite);
+                    else if(keyPressed(sprite, tic_key_left))
+                        leftCanvas(sprite);
+                    else if(keyPressed(sprite, tic_key_right))
+                        rightCanvas(sprite);
+                    else if(keyPressed(sprite, tic_key_delete))
+                        deleteCanvas(sprite);
+                    // To be able to change tool after selection
+                    else if(keyPressed(sprite, tic_key_1))
+                        sprite->mode = SPRITE_DRAW_MODE;
+                    else if(keyPressed(sprite, tic_key_2))
+                        sprite->mode = SPRITE_PICK_MODE;
+                    else if(keyPressed(sprite, tic_key_3))
+                        sprite->mode = SPRITE_SELECT_MODE;
+                    else if(keyPressed(sprite, tic_key_4))
+                        sprite->mode = SPRITE_FILL_MODE;
+                    else if(keyPressed(sprite, tic_key_5))
+                        flipCanvasHorz(sprite);
+                    else if(keyPressed(sprite, tic_key_6))
+                        flipCanvasVert(sprite);
+                    else if(keyPressed(sprite, tic_key_7))
+                        rotateCanvas(sprite);
+                    else if(keyPressed(sprite, tic_key_8))
+                        deleteCanvas(sprite);
+                }
+            }
+            else
+            {
+                if(keyPressed(sprite, tic_key_up))
+                    upSprite(sprite);
+                else if(keyPressed(sprite, tic_key_down))
+                    downSprite(sprite);
+                else if(keyPressed(sprite, tic_key_left))
+                    leftSprite(sprite);
+                else if(keyPressed(sprite, tic_key_right))
+                    rightSprite(sprite);
+                else if(keyPressed(sprite, tic_key_delete))
+                    deleteSprite(sprite);
+                else if(keyPressed(sprite, tic_key_tab))
+                    switchBanks(sprite);
+
+                if(!sprite->palette.edit)
+                {
+
+                    if(keyPressed(sprite, tic_key_1))
+                        sprite->mode = SPRITE_DRAW_MODE;
+                    else if(keyPressed(sprite, tic_key_2))
+                        sprite->mode = SPRITE_PICK_MODE;
+                    else if(keyPressed(sprite, tic_key_3))
+                        sprite->mode = SPRITE_SELECT_MODE;
+                    else if(keyPressed(sprite, tic_key_4))
+                        sprite->mode = SPRITE_FILL_MODE;
+
+                    else if(keyPressed(sprite, tic_key_5))
+                        flipSpriteHorz(sprite);
+                    else if(keyPressed(sprite, tic_key_6))
+                        flipSpriteVert(sprite);
+                    else if(keyPressed(sprite, tic_key_7))
+                        rotateSprite(sprite);
+                    else if(keyPressed(sprite, tic_key_8))
+                        deleteSprite(sprite);
+
+                    if(sprite->mode == SPRITE_DRAW_MODE)
+                    {
+                        if(keyPressed(sprite, tic_key_minus))
+                            updateBrushSize(sprite, -1);
+                        else if(keyPressed(sprite, tic_key_equals))
+                            updateBrushSize(sprite, +1);
+                        else if(keyPressed(sprite, tic_key_leftbracket))
+                            updateColorIndex(sprite, -1);
+                        else if(keyPressed(sprite, tic_key_rightbracket))
+                            updateColorIndex(sprite, +1);
+                        else if(keyPressed(sprite, tic_key_h))
+                            sprite->brush.symmetryHorizontal = !sprite->brush.symmetryHorizontal;
+                        else if(keyPressed(sprite, tic_key_v))
+                            sprite->brush.symmetryVertical = !sprite->brush.symmetryVertical;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void sprite_scanline(tic_mem* tic, s32 row, void* data)
+{
+    Sprite* sprite = (Sprite*)data;
+
+    if(row == 0)
+    {
+        const tic_palette* palette = sprite->palette.preview
+                                         ? sprite->palette.preview
+                                         : bankPalette(sprite, sprite->palette.vbank1);
+
+        memcpy(&tic->ram->vram.palette, palette, sizeof(tic_palette));
+    }
+}
+
+void sprite_tick(Sprite* sprite)
+{
+    tic_mem* tic = sprite->tic;
+
+    processAnim(sprite->anim.movie, sprite);
+
+    // process scroll
+    {
+        tic80_input* input = &tic->ram->input;
+
+        if(input->mouse.scrolly)
+        {
+            s32 delta = input->mouse.scrolly;
+
+            if(mousePos(sprite, &(tic_rect){SheetX, SheetY, TIC_SPRITESHEET_SIZE, TIC_SPRITESHEET_SIZE}))
+            {
+                s32 size = sprite->canvasSize;
+
+                if(delta > 0)
+                {
+                    if(size < (TIC_SPRITESIZE * TIC_SPRITESIZE)) size <<= 1;
+                }
+                else if(size > TIC_SPRITESIZE)
+                    size >>= 1;
+
+                updateSpriteSize(sprite, size);
+            }
+            else if(mousePos(sprite, &(tic_rect){CanvasX, CanvasY, CanvasW, CanvasH}))
+                spriteSetBrushSize(sprite, sprite->brush.size + (delta > 0 ? 1 : -1));
+        }
+    }
+
+    // A slider drag is one undo step, committed when the button is released.
+    if(sprite->palette.drag && !sprite->deps.mouse[tic_mouse_left].down)
+    {
+        sprite->palette.drag = false;
+        history_add(sprite->paletteHistory);
+    }
+
+    processKeyboard(sprite);
+
+    drawSheet(sprite, SheetX, SheetY);
+    drawCanvas(sprite, CanvasX, CanvasY);
+    drawPalette(sprite, PaletteX, PaletteY);
+
+    VBANK(tic, 1)
+    {
+        tic_api_cls(tic, tic->ram->vram.vars.clear = tic_color_cyan);
+
+        static const tic_rect bg[] =
+            {
+                // vbank1's cyan is the clear colour, so the strip over the
+                // main screen must be painted with a real colour.
+                {0, 0, TIC80_WIDTH, BarH},
+                {0, BarH, SheetX, CanvasY - BarH},
+                {0, CanvasY, CanvasX, CanvasH},
+                {CanvasX + CanvasW, CanvasY, SheetX - (CanvasX + CanvasW), CanvasH},
+
+                {0, CanvasY + CanvasH, SheetX, PaletteY - CanvasY - CanvasH},
+
+                {0, PaletteY, PaletteX, PaletteH},
+                {PaletteX + PaletteW, PaletteY, SheetX - PaletteX - PaletteW, PaletteH},
+
+                {0, PaletteY + PaletteH, SheetX, TIC80_HEIGHT - PaletteY - PaletteH},
+            };
+
+        memcpy(tic->ram->vram.palette.data, sprite->view->cartPalette->data, sizeof(tic_palette));
+
+        for(const tic_rect* r = bg; r < bg + COUNT_OF(bg); r++)
+            tic_api_rect(tic, r->x, r->y, r->w, r->h, tic_color_grey);
+
+        drawCanvasVBank1(sprite, 24, 20);
+        drawMoveButtons(sprite);
+
+        if(sprite->flags.show)
+        {
+            if(is4bpp(sprite))
+                drawFlags(sprite, 24 + 64 + 7, 20 + 8);
+        }
+
+        sprite->palette.edit
+            ? drawRGBSliders(sprite, 24, 91)
+            : drawTools(sprite, 12, 96);
+
+        drawPaletteVBank1(sprite, 24, 112);
+        drawSheetVBank1(sprite, TIC80_WIDTH - TIC_SPRITESHEET_SIZE - 1, SheetY);
+    }
+
+    sprite->tickCounter++;
+}
+
+static void emptyDone(void* data)
+{
+    (void)data;
+}
+
+static void setIdle(void* data)
+{
+    Sprite* sprite = data;
+    sprite->anim.movie = resetMovie(&sprite->anim.idle);
+}
+
+static void freeAnim(Sprite* sprite)
+{
+    FREE(sprite->anim.bank.items);
+    FREE(sprite->anim.page.items);
+}
+
+// The clipboard buttons take no arguments, so each editor's own operation gets
+// a uniform entry point here. The argument the old dispatch passed is folded in.
+static void clipboardCut(void* app)
+{
+    Sprite* sprite = app;
+    cutToClipboard(sprite);
+}
+static void clipboardCopy(void* app)
+{
+    Sprite* sprite = app;
+    copyToClipboard(sprite);
+}
+static void clipboardPaste(void* app)
+{
+    Sprite* sprite = app;
+    copyFromClipboard(sprite);
+}
+static void clipboardUndo(void* app)
+{
+    Sprite* sprite = app;
+    undo(sprite);
+}
+static void clipboardRedo(void* app)
+{
+    Sprite* sprite = app;
+    redo(sprite);
+}
+
+const ClipboardOps SpriteClipboard = {clipboardCut, clipboardCopy, clipboardPaste, clipboardUndo, clipboardRedo};
+
+void sprite_set_view(Sprite* sprite, const SpriteView* view)
+{
+    sprite->view = view;
+}
+
+void initSprite(Sprite* sprite, const SpriteDeps* deps, tic_tiles* src, tic_palettes* palettes)
+{
+    if(sprite->select.back == NULL) sprite->select.back = (u8*)malloc(CANVAS_SIZE * CANVAS_SIZE);
+    if(sprite->select.front == NULL) sprite->select.front = (u8*)malloc(CANVAS_SIZE * CANVAS_SIZE);
+    if(sprite->history) history_delete(sprite->history);
+    if(sprite->paletteHistory) history_delete(sprite->paletteHistory);
+    freeAnim(sprite);
+
+    *sprite = (Sprite){
+        .deps = *deps,
+        .tic = deps->tic,
+        .tickCounter = 0,
+        .src = src,
+        .spritePos = {1, 0},
+        .blit = {0},
+        .color = 2,
+        .color2 = 0,
+        .canvasSize = TIC_SPRITESIZE,
+        .palette =
+            {
+                .edit = false,
+                .focus = -1,
+            },
+        .brush.size = 1,
+        .draw =
+            {
+                .start = false,
+                .lastPos = {-1, -1},
+            },
+        .select =
+            {
+                .rect = {0, 0, 0, 0},
+                .start = {0, 0},
+                .drag = false,
+                .back = sprite->select.back,
+                .front = sprite->select.front,
+            },
+        .mode = SPRITE_DRAW_MODE,
+        .history = history_create(src, TIC_SPRITES * sizeof(tic_tile)),
+        .paletteHistory = history_create(palettes, sizeof(tic_palettes)),
+        .needsHistoryUpdate = false,
+        .anim =
+            {
+                .idle = {
+                    .done = emptyDone,
+                },
+
+                .bank = MOVIE_DEF(STUDIO_ANIM_TIME, setIdle, {
+                                                                 {0, 0, STUDIO_ANIM_TIME, &sprite->anim.pos.bank, AnimEaseIn},
+                                                             }),
+
+                .page = MOVIE_DEF(STUDIO_ANIM_TIME, setIdle, {
+                                                                 {0, 0, STUDIO_ANIM_TIME, &sprite->anim.pos.page, AnimEaseIn},
+                                                             }),
+            },
+    };
+
+    sprite->anim.movie = resetMovie(&sprite->anim.idle);
+
+    switchBitMode(sprite, TIC_DEFAULT_BIT_DEPTH);
+}
+
+void freeSprite(Sprite* sprite)
+{
+    freeAnim(sprite);
+    free(sprite->select.back);
+    free(sprite->select.front);
+    history_delete(sprite->history);
+    history_delete(sprite->paletteHistory);
+    free(sprite);
+}

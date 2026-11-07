@@ -24,6 +24,8 @@
 
 #include "api.h"
 
+#define MAX_SUPPORTED_LANGS 32
+
 struct tic_script
 {
     u8 id;
@@ -32,8 +34,8 @@ struct tic_script
     const char* projectComment;
     struct
     {
-        bool(*init)(tic_mem* memory, const char* code);
-        void(*close)(tic_mem* memory);
+        bool (*init)(tic_mem* memory, const char* code);
+        void (*close)(tic_mem* memory);
 
         tic_tick tick;
         tic_boot boot;
@@ -53,7 +55,7 @@ struct tic_script
     const char* singleComment;
     const char* blockEnd;
 
-    const char* const *keywords;
+    const char* const* keywords;
     s32 keywordsCount;
 
     tic_lang_isalnum lang_isalnum;
@@ -69,7 +71,6 @@ struct tic_script
         s32 size;
         const char* name;
     } demo, mark, *demos;
-
 };
 
 typedef struct tic_script tic_script;
