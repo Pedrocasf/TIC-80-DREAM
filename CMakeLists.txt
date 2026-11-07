@@ -45,7 +45,7 @@ if(BUILD_RENDER_CACHE)
 endif()
 # Sokol is the layer the desktop ships and the web has built since the browser
 # change; the platforms below cannot build it and keep the SDL default.
-if(ANDROID OR NINTENDO_3DS OR NINTENDO_SWITCH OR BAREMETALPI OR RPI OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+if(ANDROID OR NINTENDO_3DS OR NINTENDO_SWITCH OR BAREMETALPI OR RPI OR VITA OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
     set(BUILD_SDL_DEFAULT ON)
     set(BUILD_SOKOL_DEFAULT OFF)
 else()
@@ -90,6 +90,15 @@ endif()
 
 if(NOT BUILD_SDL)
     set(BUILD_SDLGPU OFF)
+endif()
+
+# The Vita has no OpenGL, SDL renders through its own GXM backend there.
+if(VITA)
+    set(BUILD_SDLGPU OFF)
+    set(BUILD_PLAYER OFF)
+    if(NOT TIC_DATA_PATH)
+        set(TIC_DATA_PATH "ux0:/data/tic80")
+    endif()
 endif()
 
 if(NINTENDO_SWITCH AND NOT LIBRETRO_STATIC)
@@ -158,7 +167,7 @@ endif()
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-if (NOT DEFINED CMAKE_POSITION_INDEPENDENT_CODE)
+if (NOT DEFINED CMAKE_POSITION_INDEPENDENT_CODE AND NOT VITA)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
@@ -232,6 +241,7 @@ include(cmake/apple.cmake)
 include(cmake/libretro.cmake)
 include(cmake/n3ds.cmake)
 include(cmake/nswitch.cmake)
+include(cmake/vita.cmake)
 
 # The Linux desktop entry, its icon and the mime type belong to the app, not
 # to the layer; a build with no layer at all has no binary to install.

@@ -200,3 +200,9 @@ build/*.map
 # local tooling, not part of the project
 .claude/
 openspec/
+# vita
+build/tic80
+build/*.velf
+build/*.self*
+build/*.vpk*
+build/*.stamp

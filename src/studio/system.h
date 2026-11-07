@@ -44,7 +44,9 @@
 #else
 #define TIC_HOST "dev.tic80.com"
 #endif
-#if defined(__TIC_WIN7__)
+// The Vita speaks TLS of its own age and the site no longer does, but every
+// endpoint it needs answers over plain http. See build/vita/README.md.
+#if defined(__TIC_WIN7__) || defined(__TIC_VITA__)
 #define TIC_WEBSITE_PROTOCOL "http://"
 #else
 #define TIC_WEBSITE_PROTOCOL "https://"
